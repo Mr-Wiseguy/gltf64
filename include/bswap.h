@@ -56,8 +56,12 @@ inline float swap_endianness(float in) noexcept
     }
     else
     {
-        uint32_t ret = bswap32(reinterpret_cast<uint32_t&>(in));
-        return reinterpret_cast<float&>(ret);
+        uint32_t in_bytes;
+        float ret;
+        memcpy(&in_bytes, &in, sizeof(float));
+        in_bytes = bswap32(in_bytes);
+        memcpy(&ret, &in_bytes, sizeof(float));
+        return ret;
     }
 }
 

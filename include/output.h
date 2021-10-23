@@ -74,6 +74,7 @@ struct OutputMaterialDraw {
     uint16_t num_groups;
     uint16_t material_index;
     uint32_t groups_offset; // File offset for triangle group array
+    uint32_t gfx; // Pointer used at runtime
 
     void swap_endianness() noexcept
     {
@@ -86,7 +87,6 @@ struct OutputMaterialDraw {
 struct OutputJointMeshLayer {
     uint32_t num_draws;
     uint32_t draws_offset;// File offset for material draw array
-    uint32_t gfx; // Pointer used at runtime
     
     void swap_endianness() noexcept
     {
