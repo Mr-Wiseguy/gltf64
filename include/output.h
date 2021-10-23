@@ -99,7 +99,7 @@ struct OutputJoint {
     float posX; // Base positional offset x component (float to save conversion time later on)
     float posY; // Base positional offset y component
     float posZ; // Base positional offset z component
-    uint8_t parent;
+    int8_t parent;
     uint8_t reserved; // Would be automatically added for alignment
     uint16_t reserved2; // Ditto
     OutputJointMeshLayer layers[static_cast<size_t>(DrawLayer::count)];

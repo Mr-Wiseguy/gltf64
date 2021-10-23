@@ -16,6 +16,17 @@ using buffer_index_type = int;
 using triangle_type = std::array<index_type, 3>;
 using buffer_triangle_type = std::array<buffer_index_type, 3>;
 
+struct JointTransform {
+    glm::mat4 model_inverse_transform; // Matrix to convert verts from model to local space
+    glm::mat4 local_transform; // Matrix to concat with the parent joint's matrix
+    glm::vec3 model_translate; // Translation of this joint in model space
+    glm::vec3 local_translate; // Translation of this joint in the parent joint's space
+    glm::quat model_rotate; // Rotation of this joint in model space
+    glm::quat local_rotate; // Rotation of this joint in the parent joint's space
+    glm::vec3 model_scale; // Scale of this joint in model space
+    glm::vec3 local_scale; // Scale of this joint in the parent joint's space
+};
+
 // A triangle with an associated material, used as an intermediate data type while processing the input model
 struct MaterialTriangle {
     index_type indices[3]; // Vertex buffer indices
@@ -85,7 +96,6 @@ class N64Joint {
 public:
     int32_t parent;
     glm::vec3 offset;
-    glm::quat rot;
 };
 
 struct VertexBufferReservation {

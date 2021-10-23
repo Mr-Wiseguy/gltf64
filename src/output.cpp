@@ -50,6 +50,7 @@ void write_model_file(const std::filesystem::path& file_path, const N64Model& in
     OutputModel output_model{};
 
     // Iterate over all of the joints in the model and write their data to the file
+    const auto& joints = input_model.get_joints();
     const auto& joint_meshes = input_model.get_joint_meshes();
     size_t num_joints = joint_meshes.size();
 
@@ -67,17 +68,18 @@ void write_model_file(const std::filesystem::path& file_path, const N64Model& in
 
     // Get the verts from the input model
     const auto& input_verts = input_model.get_verts();
-    fmt::print("Joints pos: {:>08x}\n", joint_pos);
+    // fmt::print("Joints pos: {:>08x}\n", joint_pos);
 
     for (size_t joint_idx = 0; joint_idx < num_joints; joint_idx++)
     {
+        const auto& cur_joint = joints[joint_idx];
         const auto& cur_joint_mesh = joint_meshes[joint_idx];
         auto& cur_output_joint = output_joints[joint_idx];
 
-        cur_output_joint.posX = 0.0f;
-        cur_output_joint.posY = 0.0f;
-        cur_output_joint.posZ = 0.0f;
-        cur_output_joint.parent = 0xFF;
+        cur_output_joint.posX = cur_joint.offset[0];
+        cur_output_joint.posY = cur_joint.offset[1];
+        cur_output_joint.posZ = cur_joint.offset[2];
+        cur_output_joint.parent = static_cast<int8_t>(cur_joint.parent);
 
         for (size_t layer = 0; layer < num_draw_layers; layer++)
         {
@@ -91,7 +93,7 @@ void write_model_file(const std::filesystem::path& file_path, const N64Model& in
             std::streampos draws_pos = skip_array<OutputMaterialDraw>(model_file, num_draws);
             cur_output_joint.layers[layer].num_draws = num_draws;
             cur_output_joint.layers[layer].draws_offset = draws_pos;
-            fmt::print("  Draws pos ({:>2} draws): {:>08x}\n", num_draws, draws_pos);
+            // fmt::print("  Draws pos ({:>2} draws): {:>08x}\n", num_draws, draws_pos);
 
             for (size_t draw_idx = 0; draw_idx < num_draws; draw_idx++)
             {
@@ -110,7 +112,7 @@ void write_model_file(const std::filesystem::path& file_path, const N64Model& in
                 cur_output_draw.material_index = cur_draw.material_index;
                 cur_output_draw.groups_offset = groups_pos;
                 cur_output_draw.swap_endianness();
-                fmt::print("    Groups pos ({:>2} groups): {:>08x}\n", num_groups, groups_pos);
+                // fmt::print("    Groups pos ({:>2} groups): {:>08x}\n", num_groups, groups_pos);
 
                 for (size_t group_idx = 0; group_idx < num_groups; group_idx++)
                 {
@@ -158,7 +160,7 @@ void write_model_file(const std::filesystem::path& file_path, const N64Model& in
                     // Record the current file position and write the triangles to the file
                     std::streampos tri_pos = model_file.tellp();
                     model_file.write(reinterpret_cast<const char*>(output_tris.data()), num_tris * sizeof(output_tris[0]));
-                    fmt::print("      Tris pos ({:>2} tris): {:>08x}\n", num_tris, tri_pos);
+                    // fmt::print("      Tris pos ({:>2} tris): {:>08x}\n", num_tris, tri_pos);
 
                     // Set the remaining group parameters and correct the group's endianness
                     cur_output_group.triangles_offset = tri_pos;

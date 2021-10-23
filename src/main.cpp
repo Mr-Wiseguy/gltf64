@@ -10,10 +10,18 @@
 //     void print(Ts...) {}
 // }
 
-#include <span>
+#if __has_include(<span>)
+    #include <span>
+#else
+    #include <tcb/span.hpp>
+    namespace std {
+        using tcb::span;
+    }
+#endif
 
 #include <tiny_gltf.h>
 #include <meshoptimizer.h>
+#include <glm/gtx/matrix_decompose.hpp>
 
 #include <n64model.h>
 #include <materials.h>
@@ -192,7 +200,7 @@ dynamic_array<size_t> sort_indices(Iterator begin, Iterator end, CompareType com
     return ret;
 }
 
-void populate_verts_triangles(const tinygltf::Model& model, vertex_array& verts, triangle_array& indices, float scale)
+void populate_verts_triangles(const tinygltf::Model& model, vertex_array& verts, triangle_array& indices, const dynamic_array<glm::vec3>& joint_translations, float scale)
 {
     size_t vert_count = 0;
     size_t index_count = 0;
@@ -211,13 +219,19 @@ void populate_verts_triangles(const tinygltf::Model& model, vertex_array& verts,
             index_count += populate_indices(model, indices_accessor, &indices[index_count], vert_count, primitive.material);
 
             const auto& attributes = primitive.attributes;
-
-            // Read positions
-            size_t cur_vert_count = gltf_foreach_attribute<float>("POSITION", model, attributes, 
-            [&](size_t vert_index, float* pos)
+            
+            // Check if there is a vertex position attribute
+            auto find_pos_attribute = attributes.find("POSITION");
+            if (find_pos_attribute == attributes.end())
             {
-                verts[vert_count + vert_index].pos = glm::round(*reinterpret_cast<glm::vec3*>(pos) * scale);
-            });
+                fmt::print(stderr, "Vertices in primitive have no positions!\n");
+                std::exit(EXIT_FAILURE);
+            }
+
+            // Get the vertex position accessor and the vertex count
+            int pos_accessor_index = find_pos_attribute->second;
+            const auto& pos_accessor = model.accessors[pos_accessor_index];
+            size_t cur_vert_count = pos_accessor.count;
 
             // TODO read vertex colors if the material is unlit
             // Read normals
@@ -255,6 +269,14 @@ void populate_verts_triangles(const tinygltf::Model& model, vertex_array& verts,
                 }
                 // Pick the highest weighted joint and assign it to the vertex
                 verts[vert_count + vert_index].joint = vert_joints[vert_index][sorted_indices[0]];
+            });
+
+            // Read positions, adding the corresponding joint's offset
+            gltf_foreach<float>(model, pos_accessor, 
+            [&](size_t vert_index, float* pos)
+            {
+                N64Vertex& cur_vert = verts[vert_count + vert_index];
+                cur_vert.pos = glm::round((*reinterpret_cast<glm::vec3*>(pos) - joint_translations[cur_vert.joint]) * scale);
             });
 
             vert_count += cur_vert_count;
@@ -360,6 +382,56 @@ dynamic_array<int> get_joint_parents(const tinygltf::Model& model, const joint_m
         ret[joint] = node_parents[node_index];
     }
 
+    return ret;
+}
+
+dynamic_array<glm::mat4> get_inverse_joint_matrices(const tinygltf::Model& model, const joint_mapping& joints_to_nodes)
+{
+    dynamic_array<glm::mat4> ret(joints_to_nodes.size());
+
+    int inverseBindMatricesAccessorIndex = model.skins[0].inverseBindMatrices;
+    const auto& inverseBindMatricesAccessor = model.accessors[inverseBindMatricesAccessorIndex];
+
+    // Read the inverse matrices from the accessor
+    gltf_foreach<float>(model, inverseBindMatricesAccessor, 
+        [&](size_t i, float* vals)
+        {
+            // Copy node inverse matrix
+            glm::mat4* valsMatrix = reinterpret_cast<glm::mat4*>(vals);
+            ret[i] = *valsMatrix;
+        }
+    );
+
+    return ret;
+}
+
+dynamic_array<glm::mat4> get_joint_matrices(const dynamic_array<glm::mat4>& joint_inverse_matrices)
+{
+    dynamic_array<glm::mat4> ret(joint_inverse_matrices.size());
+
+    // Invert the inverse matrices to get the uninverted matrices
+    std::transform(joint_inverse_matrices.begin(), joint_inverse_matrices.end(), ret.begin(),
+        [](const glm::mat4& inverse)
+        {
+            return glm::inverse(inverse);
+        }
+    );
+    
+    return ret;
+}
+
+dynamic_array<glm::vec3> get_joint_translations(const dynamic_array<glm::mat4>& joint_matrices)
+{
+    dynamic_array<glm::vec3> ret(joint_matrices.size());
+
+    // Invert the inverse matrices to get the uninverted matrices
+    std::transform(joint_matrices.begin(), joint_matrices.end(), ret.begin(),
+        [](const glm::mat4& joint_matrix)
+        {
+            return glm::vec3{joint_matrix[3]};
+        }
+    );
+    
     return ret;
 }
 
@@ -490,6 +562,97 @@ dynamic_array<int> sort_joints(const tinygltf::Model& model, const dynamic_array
     return ret;
 }
 
+// Gets the model and local transforms (rotation, translation, scale) for every joint as well as the inverse matrix
+dynamic_array<JointTransform> get_joint_transforms(
+    const tinygltf::Model& model, const dynamic_array<int>& sorted_joints, const joint_mapping& joints_to_nodes,
+    const dynamic_array<glm::mat4>& inverse_joint_matrices, const dynamic_array<glm::mat4>& joint_matrices)
+{
+    dynamic_array<JointTransform> ret(sorted_joints.size());
+
+    // Read the local transformations for each joint from the gltf data
+    // Copy the previously read inverse matrix
+    // Decompose the previously calculated uninverted matrix
+    for (size_t joint_idx = 0; joint_idx < sorted_joints.size(); joint_idx++)
+    {
+        int joint = sorted_joints[joint_idx];
+        int node_idx = joints_to_nodes[joint];
+        auto& node = model.nodes[node_idx];
+
+        JointTransform& joint_transform = ret[joint_idx];
+
+        // Copy node translation
+        if (node.translation.size() == 3)
+        {
+            joint_transform.local_translate = glm::vec3{
+                static_cast<float>(node.translation[0]),
+                static_cast<float>(node.translation[1]),
+                static_cast<float>(node.translation[2])
+            };
+        }
+        else
+        {
+            joint_transform.local_translate = glm::vec3{0.0f, 0.0f, 0.0f};
+        }
+
+        // Copy node rotation
+        if (node.rotation.size() == 4)
+        {
+            joint_transform.local_rotate = glm::quat{
+                static_cast<float>(node.rotation[3]),
+                static_cast<float>(node.rotation[0]),
+                static_cast<float>(node.rotation[1]),
+                static_cast<float>(node.rotation[2])
+            };
+        }
+        else
+        {
+            joint_transform.local_rotate = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+        }
+
+        // Copy node scale
+        if (node.scale.size() == 3)
+        {
+            joint_transform.local_scale = glm::vec3{
+                static_cast<float>(node.scale[0]),
+                static_cast<float>(node.scale[1]),
+                static_cast<float>(node.scale[2])
+            };
+        }
+        else
+        {
+            joint_transform.local_scale = glm::vec3{1.0f, 1.0f, 1.0f};
+        }
+
+
+        // Copy node inverse matrix
+        const glm::mat4& inverse_joint_matrix = inverse_joint_matrices[joint];
+        joint_transform.model_inverse_transform = inverse_joint_matrix;
+        // fmt::print("Joint: {} ({:<})\n", joint, model.nodes[node_idx].name);
+        // fmt::print("  inverse mat:\n");
+        // fmt::print("    {:>9.6f} {:>9.6f} {:>9.6f} {:>9.6f}\n", inverse_joint_matrix[0][0], inverseMat[0][1], inverse_joint_matrix[0][2], inverse_joint_matrix[0][3]);
+        // fmt::print("    {:>9.6f} {:>9.6f} {:>9.6f} {:>9.6f}\n", inverse_joint_matrix[1][0], inverseMat[1][1], inverse_joint_matrix[1][2], inverse_joint_matrix[1][3]);
+        // fmt::print("    {:>9.6f} {:>9.6f} {:>9.6f} {:>9.6f}\n", inverse_joint_matrix[2][0], inverseMat[2][1], inverse_joint_matrix[2][2], inverse_joint_matrix[2][3]);
+        // fmt::print("    {:>9.6f} {:>9.6f} {:>9.6f} {:>9.6f}\n", inverse_joint_matrix[3][0], inverseMat[3][1], inverse_joint_matrix[3][2], inverse_joint_matrix[3][3]);
+        const glm::mat4& mat = joint_matrices[joint];
+        glm::vec3& model_scale = joint_transform.model_scale;
+        glm::quat& model_rotate = joint_transform.model_rotate;
+        glm::vec3& model_translate = joint_transform.model_translate;
+        glm::vec3 skew;
+        glm::vec4 perspective;
+        glm::decompose(mat, model_scale, model_rotate, model_translate, skew, perspective);
+        // fmt::print("  local rot: {:>9.6f} {:>9.6f} {:>9.6f} {:>9.6f}\n",
+        //     joint_transform.local_rotate[0], joint_transform.local_rotate[1], joint_transform.local_rotate[2], joint_transform.local_rotate[3]);
+        // fmt::print("  model rot: {:>9.6f} {:>9.6f} {:>9.6f} {:>9.6f}\n",
+        //     model_rotate[0], model_rotate[1], model_rotate[2], model_rotate[3]);
+        // fmt::print("  local pos: {:>9.6f} {:>9.6f} {:>9.6f}\n",
+        //     joint_transform.local_translate[0], joint_transform.local_translate[1], joint_transform.local_translate[2]);
+        // fmt::print("  model pos: {:>9.6f} {:>9.6f} {:>9.6f}\n",
+        //     model_translate[0], model_translate[1], model_translate[2]);
+    }
+
+    return ret;
+}
+
 // Returns the index of each joint based on the model draw order
 dynamic_array<int> get_joint_indices(const dynamic_array<int>& sorted_joints)
 {
@@ -497,7 +660,7 @@ dynamic_array<int> get_joint_indices(const dynamic_array<int>& sorted_joints)
     int num_joints = *std::max_element(sorted_joints.begin(), sorted_joints.end()) + 1;
 
     // Invert sorted_joints to get the draw index for each joint
-    dynamic_array<int> ret(num_joints);
+    dynamic_array<int> ret(num_joints, -1);
 
     for (size_t draw_index = 0; draw_index < sorted_joints.size(); draw_index++)
     {
@@ -900,13 +1063,43 @@ dynamic_array<JointMeshLayer> build_draw_layer(dynamic_array<joint_span>& spans,
 
 N64Model create_model(const tinygltf::Model& model, float scale = 100.0f)
 {
+    joint_mapping joints_to_nodes = map_joints_to_nodes(model);
+
+    // for (size_t joint = 0; joint < joints_to_nodes.size(); joint++)
+    // {
+    //     int node = joints_to_nodes[joint];
+    //     fmt::print("Joint: {} Node: {}\n", joint, node);
+    // }
+    
+    // Get the parent joint for each joint (or -1 if it's a root joint)
+    dynamic_array<int> joint_parents = get_joint_parents(model, joints_to_nodes);
+
+    // for (size_t joint = 0; joint < joints_to_nodes.size(); joint++)
+    // {
+    //     int node_index = joints_to_nodes[joint];
+    //     int parent = joint_parents[joint];
+    //     if (parent == -1)
+    //     {
+    //         fmt::print("Joint {:<3} ({:<16}) has no parent\n", joint, model.nodes[node_index].name);
+    //     }
+    //     else
+    //     {
+    //         fmt::print("Joint {:<3} ({:<16}) is child of {:<3} ({:<16})\n", joint, model.nodes[node_index].name, parent, model.nodes[joints_to_nodes[parent]].name);
+    //     }
+    // }
+
+    // Get the inverse transforms of the joints from the gltf data, then calculate the uninverted matrix and translation for each joint
+    dynamic_array<glm::mat4> inverse_joint_matrices = get_inverse_joint_matrices(model, joints_to_nodes);
+    dynamic_array<glm::mat4> joint_matrices = get_joint_matrices(inverse_joint_matrices);
+    dynamic_array<glm::vec3> joint_translations = get_joint_translations(joint_matrices);
+
     // Get the number of verts and triangles in the model
     vertex_triangle_count vert_index_count = num_verts_triangles(model);
 
     // Read vertices and triangle indices from the model
     vertex_array original_verts(std::get<0>(vert_index_count));
     triangle_array triangles(std::get<1>(vert_index_count));
-    populate_verts_triangles(model, original_verts, triangles, scale);
+    populate_verts_triangles(model, original_verts, triangles, joint_translations, scale);
 
     // Generate vert remap to remove duplicates
     dynamic_array<glm::vec<3, unsigned int>> original_indices(triangles.size());
@@ -946,30 +1139,6 @@ N64Model create_model(const tinygltf::Model& model, float scale = 100.0f)
     // Read materials from the model
     material_array materials = read_materials(model);
 
-    // Get the parent joint for each joint (or -1 if it's a root joint)
-    joint_mapping joints_to_nodes = map_joints_to_nodes(model);
-
-    // for (const auto& cur_map : joints_to_nodes)
-    // {
-    //     fmt::print("Joint: {} Node: {}\n", cur_map.first, cur_map.second);
-    // }
-    
-    dynamic_array<int> joint_parents = get_joint_parents(model, joints_to_nodes);
-
-    // for (size_t joint = 0; joint < joints_to_nodes.size(); joint++)
-    // {
-    //     int node_index = joints_to_nodes[joint];
-    //     int parent = joint_parents[joint];
-    //     if (parent == -1)
-    //     {
-    //         fmt::print("Joint {:<3} ({:<16}) has no parent\n", joint, model.nodes[node_index].name);
-    //     }
-    //     else
-    //     {
-    //         fmt::print("Joint {:<3} ({:<16}) is child of {:<3} ({:<16})\n", joint, model.nodes[node_index].name, parent, model.nodes[joints_to_nodes[parent]].name);
-    //     }
-    // }
-
     // Determine which pairs of joint share triangles
     joint_ties tied_joints = calculate_tied_joints(joints_to_nodes.size(), verts, triangles);
 
@@ -993,6 +1162,12 @@ N64Model create_model(const tinygltf::Model& model, float scale = 100.0f)
 
     // Convert sorted_joints into a reverse lookup of joint -> render position
     auto joint_indices = get_joint_indices(sorted_joints);
+
+    // Get the model-space and local transforms for every joint
+    auto joint_transforms = get_joint_transforms(model, sorted_joints, joints_to_nodes, inverse_joint_matrices, joint_matrices);
+
+    // Remove translations for every joint from any vertices owned by them, since they'll be added back in during rendering
+    // apply_inverse_joint_translations(joint_transforms, joint_indices, verts, scale);
 
     // fmt::print("Before sorting:\n");
     // for (const auto& tri : triangles)
@@ -1062,6 +1237,34 @@ N64Model create_model(const tinygltf::Model& model, float scale = 100.0f)
         }
     }
 
+    // Build the joint array
+    dynamic_array<N64Joint> joints(sorted_joints.size());
+    
+    std::transform(sorted_joints.begin(), sorted_joints.end(), joint_transforms.begin(), joints.begin(),
+        [&](int joint, const JointTransform& joint_transform)
+        {
+            int joint_parent = joint_parents[joint];
+            int joint_parent_index;
+            if (joint_parent != -1)
+            {
+                joint_parent_index = joint_indices[joint_parent];
+            }
+            else
+            {
+                joint_parent_index = -1;
+            }
+            N64Joint ret {
+                joint_parent_index,
+                joint_transform.model_translate
+            };
+            if (joint_parent_index != -1)
+            {
+                ret.offset -= joint_transforms[joint_parent_index].model_translate;
+            }
+            ret.offset *= scale;
+            return ret;
+        }
+    );
     
     // int num_mat_draws = 0;
     // int num_mat_loads = 0;
@@ -1110,6 +1313,7 @@ N64Model create_model(const tinygltf::Model& model, float scale = 100.0f)
     N64Model ret;
 
     ret.set_verts(std::move(verts));
+    ret.set_joints(std::move(joints));
     ret.set_joint_meshes(std::move(joint_meshes));
     ret.set_materials(std::move(materials));
     // ret.set_joints TODO
@@ -1154,14 +1358,26 @@ struct fmt::formatter<glm::vec<3,T,P>> {
 
 int main(int argc, char *argv[])
 {
-    if (argc != 3)
+    if (argc != 3 && argc != 4)
     {
-        fmt::print("Usage: {} [Input glTF] [Output N64 Model]\n", argv[0]);
+        fmt::print("Usage: {} [Input glTF] [Output N64 Model] [Scale (optional, default = 100)]\n", argv[0]);
         return EXIT_SUCCESS;
     }
 
     const char *gltf_path = argv[1];
     const char *output_path = argv[2];
+    float scale = 100.0f;
+    if (argc == 4)
+    {
+        const char *scale_str = argv[3];
+        char *scale_end;
+        scale = strtof(scale_str, &scale_end);
+        if (scale_end != (scale_str + strlen(scale_str)))
+        {
+            fmt::print(stderr, "Invalid scale value: {}\n", scale_str);
+            return EXIT_FAILURE;
+        }
+    }
 
     tinygltf::Model model;
     tinygltf::TinyGLTF loader;
@@ -1188,7 +1404,7 @@ int main(int argc, char *argv[])
 
     // fmt::print("Meshes: {}\n", model.meshes.size());
 
-    N64Model n64model = create_model(model, 100.0f);
+    N64Model n64model = create_model(model, scale);
 
     write_model_file(output_path, n64model);
 
