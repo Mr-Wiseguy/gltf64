@@ -1,5 +1,5 @@
 # Name of application to build
-TARGET := gltf64conv
+TARGET := gltf64
 
 DEBUG ?= 0
 
