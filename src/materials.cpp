@@ -186,7 +186,7 @@ void read_gltf64_material(const tinygltf::Material& input_mat, const tinygltf::V
         }
         output_mat.combiner = build_combiner(combiner_output);
         
-        fmt::print("combiner: {:0<16X}\n", output_mat.combiner);
+        // fmt::print("combiner: {:0<16X}\n", output_mat.combiner);
     }
 
     // Read env color

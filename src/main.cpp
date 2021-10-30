@@ -200,10 +200,17 @@ dynamic_array<size_t> sort_indices(Iterator begin, Iterator end, CompareType com
     return ret;
 }
 
-void populate_verts_triangles(const tinygltf::Model& model, vertex_array& verts, triangle_array& indices, const dynamic_array<glm::vec3>& joint_translations, float scale)
+void populate_verts_triangles(const tinygltf::Model& model, vertex_array& verts, triangle_array& indices, const dynamic_array<glm::mat4>& inverse_joint_matrices, float scale)
 {
     size_t vert_count = 0;
     size_t index_count = 0;
+
+    // Set every vertex to not having a joint in case there's no skinning in the mesh
+    for (auto& vert : verts)
+    {
+        vert.joint = -1;
+    }
+
     for (const auto& mesh : model.meshes)
     {
         for (const auto& primitive : mesh.primitives)
@@ -233,17 +240,6 @@ void populate_verts_triangles(const tinygltf::Model& model, vertex_array& verts,
             const auto& pos_accessor = model.accessors[pos_accessor_index];
             size_t cur_vert_count = pos_accessor.count;
 
-            // TODO read vertex colors if the material is unlit
-            // Read normals
-            gltf_foreach_attribute<float>("NORMAL", model, attributes,
-            [&](size_t vert_index, float* norm)
-            {
-                verts[vert_count + vert_index].norm[0] = meshopt_quantizeSnorm(norm[0], 8);
-                verts[vert_count + vert_index].norm[1] = meshopt_quantizeSnorm(norm[1], 8);
-                verts[vert_count + vert_index].norm[2] = meshopt_quantizeSnorm(norm[2], 8);
-                verts[vert_count + vert_index].norm[3] = 0;
-            });
-
             // Create a temporary array to hold the joints each vertex is skinned to
             dynamic_array<std::array<int, 4>> vert_joints(cur_vert_count);
 
@@ -271,12 +267,37 @@ void populate_verts_triangles(const tinygltf::Model& model, vertex_array& verts,
                 verts[vert_count + vert_index].joint = vert_joints[vert_index][sorted_indices[0]];
             });
 
+            // TODO read vertex colors if the material is unlit
+            // Read normals
+            gltf_foreach_attribute<float>("NORMAL", model, attributes,
+            [&](size_t vert_index, float* norm)
+            {
+                glm::vec3 norm_transformed = *reinterpret_cast<glm::vec3*>(norm);;
+                auto& cur_vert = verts[vert_count + vert_index];
+                if (cur_vert.joint != -1)
+                {
+                    norm_transformed = glm::mat3(inverse_joint_matrices[cur_vert.joint]) * norm_transformed;
+                    norm_transformed = glm::normalize(norm_transformed);
+                }
+                cur_vert.norm[0] = meshopt_quantizeSnorm(norm_transformed[0], 8);
+                cur_vert.norm[1] = meshopt_quantizeSnorm(norm_transformed[1], 8);
+                cur_vert.norm[2] = meshopt_quantizeSnorm(norm_transformed[2], 8);
+                cur_vert.norm[3] = 0;
+            });
+
             // Read positions, adding the corresponding joint's offset
             gltf_foreach<float>(model, pos_accessor, 
             [&](size_t vert_index, float* pos)
             {
                 N64Vertex& cur_vert = verts[vert_count + vert_index];
-                cur_vert.pos = glm::round((*reinterpret_cast<glm::vec3*>(pos) - joint_translations[cur_vert.joint]) * scale);
+                if (cur_vert.joint != -1)
+                {
+                    cur_vert.pos = glm::vec3(glm::round(inverse_joint_matrices[cur_vert.joint] * glm::vec4(*reinterpret_cast<glm::vec3*>(pos), 1.0f) * scale));
+                }
+                else
+                {
+                    cur_vert.pos = glm::vec3(glm::round(glm::vec4(*reinterpret_cast<glm::vec3*>(pos), 1.0f) * scale));
+                }
             });
 
             vert_count += cur_vert_count;
@@ -296,15 +317,15 @@ material_array read_materials(const tinygltf::Model& model)
         auto ext_it = input_mat.extensions.find(gtlf64_extension);
         if (ext_it != input_mat.extensions.end())
         {
-            fmt::print("glTF64 material: {}\n", input_mat.name);
+            // fmt::print("glTF64 material: {}\n", input_mat.name);
             read_gltf64_material(input_mat, ext_it->second, output_mat);
         }
         else
         {
-            fmt::print("Standard material: {}\n", input_mat.name);
+            // fmt::print("Standard material: {}\n", input_mat.name);
             read_standard_material(input_mat, output_mat);
         }
-        fmt::print("Draw layer: {}\n", output_mat.draw_layer);
+        // fmt::print("Draw layer: {}\n", output_mat.draw_layer);
     }
     return ret;
 }
@@ -318,7 +339,7 @@ joint_mapping map_joints_to_nodes(const tinygltf::Model& model)
     // Mesh with no skinning
     if (skins.size() == 0)
     {
-        return joint_mapping();
+        return joint_mapping{0};
     }
     // Too many skins
     else if (skins.size() > 1)
@@ -341,18 +362,29 @@ joint_mapping map_joints_to_nodes(const tinygltf::Model& model)
 // An array of sets, where each set corresponds to one joint and holds the set of joints that it's tied to (shares vertices with)
 using joint_ties = dynamic_array<std::set<int16_t>>;
 
-joint_ties calculate_tied_joints(size_t num_joints, const vertex_array& verts, const triangle_array& indices)
+joint_ties calculate_tied_joints(const tinygltf::Model& model, size_t num_joints, const vertex_array& verts, const triangle_array& indices)
 {
     joint_ties ret(num_joints);
-    for (size_t tri_index = 0; tri_index < indices.size(); tri_index++)
+    if (model.skins.size() != 0)
     {
-        size_t index0 = indices[tri_index].indices[0], index1 = indices[tri_index].indices[1], index2 = indices[tri_index].indices[2];
-        const N64Vertex &vert0 = verts[index0], &vert1 = verts[index1], &vert2 = verts[index2];
-        int16_t joint0 = vert0.joint, joint1 = vert1.joint, joint2 = vert2.joint;
-        // fmt::print("Triangle {} is connected to {}, {}, {}\n", tri_index, joint0, joint1, joint2);
-        ret[joint0].insert({joint1, joint2});
-        ret[joint1].insert({joint0, joint2});
-        ret[joint2].insert({joint0, joint1});
+        for (size_t tri_index = 0; tri_index < indices.size(); tri_index++)
+        {
+            size_t index0 = indices[tri_index].indices[0], index1 = indices[tri_index].indices[1], index2 = indices[tri_index].indices[2];
+            const N64Vertex &vert0 = verts[index0], &vert1 = verts[index1], &vert2 = verts[index2];
+            int16_t joint0 = vert0.joint, joint1 = vert1.joint, joint2 = vert2.joint;
+            // fmt::print("Triangle {} is connected to {}, {}, {}\n", tri_index, joint0, joint1, joint2);
+            if (joint0 != -1 && joint1 != -1 && joint2 != -1)
+            {
+                ret[joint0].insert({joint1, joint2});
+                ret[joint1].insert({joint0, joint2});
+                ret[joint2].insert({joint0, joint1});
+            }
+        }
+    }
+    else
+    {
+        // No skinning, set the only joint to be tied to itself
+        ret[0].insert(0);
     }
     return ret;
 }
@@ -389,18 +421,25 @@ dynamic_array<glm::mat4> get_inverse_joint_matrices(const tinygltf::Model& model
 {
     dynamic_array<glm::mat4> ret(joints_to_nodes.size());
 
-    int inverseBindMatricesAccessorIndex = model.skins[0].inverseBindMatrices;
-    const auto& inverseBindMatricesAccessor = model.accessors[inverseBindMatricesAccessorIndex];
+    if (model.skins.size() != 0)
+    {
+        int inverseBindMatricesAccessorIndex = model.skins[0].inverseBindMatrices;
+        const auto& inverseBindMatricesAccessor = model.accessors[inverseBindMatricesAccessorIndex];
 
-    // Read the inverse matrices from the accessor
-    gltf_foreach<float>(model, inverseBindMatricesAccessor, 
-        [&](size_t i, float* vals)
-        {
-            // Copy node inverse matrix
-            glm::mat4* valsMatrix = reinterpret_cast<glm::mat4*>(vals);
-            ret[i] = *valsMatrix;
-        }
-    );
+        // Read the inverse matrices from the accessor
+        gltf_foreach<float>(model, inverseBindMatricesAccessor, 
+            [&](size_t i, float* vals)
+            {
+                // Copy node inverse matrix
+                glm::mat4* valsMatrix = reinterpret_cast<glm::mat4*>(vals);
+                ret[i] = *valsMatrix;
+            }
+        );
+    }
+    else
+    {
+        ret[0] = glm::identity<glm::mat4>();
+    }
 
     return ret;
 }
@@ -444,34 +483,40 @@ void mark_joint_parents_used(dynamic_array<bool>& joints_used, const dynamic_arr
 }
 
 // Returns an array of all of the joints that have associated geometry or are ancestors of those
-dynamic_array<int> remove_unused_joints(const joint_mapping& joints_to_nodes, const dynamic_array<int>& joint_parents, const vertex_array& verts, const triangle_array& tris)
+dynamic_array<int> remove_unused_joints(const tinygltf::Model& model, joint_mapping& joints_to_nodes, const dynamic_array<int>& joint_parents, const vertex_array& verts, const triangle_array& tris)
 {
     int num_joints = joints_to_nodes.size();
+    dynamic_array<int> ret(num_joints);
     // Array of bools, where each bool is whether the given joint is used
     dynamic_array<bool> joints_used(num_joints, false);
 
-    // Mark any joints used by vertices (and any ancestor joints of those) as used
-    for (const auto& tri : tris)
+    if (model.skins.size() != 0)
     {
-        mark_joint_parents_used(joints_used, joint_parents, verts[tri.indices[0]].joint);
-        mark_joint_parents_used(joints_used, joint_parents, verts[tri.indices[1]].joint);
-        mark_joint_parents_used(joints_used, joint_parents, verts[tri.indices[2]].joint);
+        // Mark any joints used by vertices (and any ancestor joints of those) as used
+        for (const auto& tri : tris)
+        {
+            mark_joint_parents_used(joints_used, joint_parents, verts[tri.indices[0]].joint);
+            mark_joint_parents_used(joints_used, joint_parents, verts[tri.indices[1]].joint);
+            mark_joint_parents_used(joints_used, joint_parents, verts[tri.indices[2]].joint);
+        }
+
+        int num_used_joints = 0;
+        int joint_index = 0;
+        for (bool used : joints_used)
+        {
+            if (used)
+            {
+                ret[num_used_joints++] = joint_index;
+            }
+            ++joint_index;
+        };
+        ret.truncate(num_used_joints);
+    }
+    else
+    {
+        ret[0] = true;
     }
 
-    dynamic_array<int> ret(num_joints);
-
-    int num_used_joints = 0;
-    int joint_index = 0;
-    for (bool used : joints_used)
-    {
-        if (used)
-        {
-            ret[num_used_joints++] = joint_index;
-        }
-        ++joint_index;
-    };
-
-    ret.truncate(num_used_joints);
     return ret;
 }
 
@@ -1099,7 +1144,7 @@ N64Model create_model(const tinygltf::Model& model, float scale = 100.0f)
     // Read vertices and triangle indices from the model
     vertex_array original_verts(std::get<0>(vert_index_count));
     triangle_array triangles(std::get<1>(vert_index_count));
-    populate_verts_triangles(model, original_verts, triangles, joint_translations, scale);
+    populate_verts_triangles(model, original_verts, triangles, inverse_joint_matrices, scale);
 
     // Generate vert remap to remove duplicates
     dynamic_array<glm::vec<3, unsigned int>> original_indices(triangles.size());
@@ -1140,10 +1185,10 @@ N64Model create_model(const tinygltf::Model& model, float scale = 100.0f)
     material_array materials = read_materials(model);
 
     // Determine which pairs of joint share triangles
-    joint_ties tied_joints = calculate_tied_joints(joints_to_nodes.size(), verts, triangles);
+    joint_ties tied_joints = calculate_tied_joints(model, joints_to_nodes.size(), verts, triangles);
 
     // Get the joints that are actually needed for rendering
-    auto used_joints = remove_unused_joints(joints_to_nodes, joint_parents, verts, triangles);
+    auto used_joints = remove_unused_joints(model, joints_to_nodes, joint_parents, verts, triangles);
 
     // fmt::print("Used joints:\n");
     // for (int joint : used_joints)
@@ -1188,10 +1233,17 @@ N64Model create_model(const tinygltf::Model& model, float scale = 100.0f)
     // fmt::print("After sorting:\n");
     // for (const auto& tri : triangles)
     // {
-    //     const std::string& joint0 = model.nodes[joints_to_nodes[verts[tri.indices[0]].joint]].name;
-    //     const std::string& joint1 = model.nodes[joints_to_nodes[verts[tri.indices[1]].joint]].name;
-    //     const std::string& joint2 = model.nodes[joints_to_nodes[verts[tri.indices[2]].joint]].name;
-    //     fmt::print("  Joints: {:>12} {:>12} {:>12}\n", joint0, joint1, joint2);
+    //     // const std::string& joint0 = model.nodes[joints_to_nodes[verts[tri.indices[0]].joint]].name;
+    //     // const std::string& joint1 = model.nodes[joints_to_nodes[verts[tri.indices[1]].joint]].name;
+    //     // const std::string& joint2 = model.nodes[joints_to_nodes[verts[tri.indices[2]].joint]].name;
+    //     // fmt::print("  Joints: {:>12} {:>12} {:>12}\n", joint0, joint1, joint2);
+    //     fmt::print("  indices: {:>12} {:>12} {:>12}\n", tri.indices[0], tri.indices[1], tri.indices[2]);
+    //     const auto& vert0 = verts[tri.indices[0]];
+    //     const auto& vert1 = verts[tri.indices[1]];
+    //     const auto& vert2 = verts[tri.indices[2]];
+    //     fmt::print("  verts:   {:>12} {:>12} {:>12}\n", vert0.pos[0], vert0.pos[1], vert0.pos[2]);
+    //     fmt::print("           {:>12} {:>12} {:>12}\n", vert1.pos[0], vert1.pos[1], vert1.pos[2]);
+    //     fmt::print("           {:>12} {:>12} {:>12}\n", vert2.pos[0], vert2.pos[1], vert2.pos[2]);
     // }
 
     // TODO
@@ -1215,8 +1267,8 @@ N64Model create_model(const tinygltf::Model& model, float scale = 100.0f)
         // {
         //     int joint = sorted_joints[joint_index];
         //     int node_index = joints_to_nodes[joint];
-        //     ptrdiff_t start = joint_spans[joint_index].begin() - triangles.begin();
-        //     ptrdiff_t end = joint_spans[joint_index].end() - triangles.begin();
+        //     ptrdiff_t start = joint_spans[joint_index].begin() - layer_triangles[draw_layer].data();
+        //     ptrdiff_t end = joint_spans[joint_index].end() - layer_triangles[draw_layer].data();
         //     fmt::print("  Joint: {:<16} Start: {:<6} Stop: {:<6}\n", model.nodes[node_index].name, start, end);
         // }
 
@@ -1255,12 +1307,12 @@ N64Model create_model(const tinygltf::Model& model, float scale = 100.0f)
             }
             N64Joint ret {
                 joint_parent_index,
-                joint_transform.model_translate
+                joint_transform.local_translate
             };
-            if (joint_parent_index != -1)
-            {
-                ret.offset -= joint_transforms[joint_parent_index].model_translate;
-            }
+            // if (joint_parent_index != -1)
+            // {
+            //     ret.offset -= joint_transforms[joint_parent_index].model_translate;
+            // }
             ret.offset *= scale;
             return ret;
         }
@@ -1400,7 +1452,7 @@ int main(int argc, char *argv[])
     return -1;
     }
 
-    fmt::print("Loaded {}\n", gltf_path);
+    // fmt::print("Loaded {}\n", gltf_path);
 
     // fmt::print("Meshes: {}\n", model.meshes.size());
 
