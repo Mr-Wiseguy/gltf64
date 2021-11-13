@@ -38,6 +38,26 @@ void write_model_file(const std::filesystem::path& file_path, const N64Model& in
     // Allocate a buffer for file writing to increase performance
     std::unique_ptr<char[]> write_buf = std::make_unique<char[]>(write_buf_size);
 
+    // Allocate a vector for holding material data to reduce allocations
+    std::vector<char> material_data{};
+    material_data.reserve(128);
+
+    // Create lambdas for ease of adding data to a material
+    // Writes data of a given length to the material's data without swapping endianness
+    auto append_material_data = [&](const void* bytes, size_t length)
+    {
+        const char* start = static_cast<const char*>(bytes);
+        const char* end = start + length;
+        std::copy(start, end, std::back_inserter(material_data));
+    };
+    // Writes data of a given length to the material's data, swapping endianness
+    auto append_material_data_bswap = [&](const void* bytes, size_t length)
+    {
+        const char* start = static_cast<const char*>(bytes);
+        const char* end = start + length;
+        std::reverse_copy(start, end, std::back_inserter(material_data));
+    };
+
     // Open the file and assign the allocated write buffer
     std::ofstream model_file(file_path, std::ios_base::binary);
     model_file.rdbuf()->pubsetbuf(write_buf.get(), write_buf_size);
@@ -215,17 +235,60 @@ void write_model_file(const std::filesystem::path& file_path, const N64Model& in
     // Write the materials
     for (size_t mat_idx = 0; mat_idx < num_materials; mat_idx++)
     {
+        // Get the corresponding input material
+        const N64Material& input_material = input_model.material(mat_idx);
+
+        // Prepate the material data
+        material_data.clear();
+        
+        // Calculate the output material's DL length and material flags
+        MaterialFlags cur_flags = MaterialFlags::none;
+        size_t cur_gfx_length = 2; // Starts with a pipesync and ends with an end_dl
+
+        // Write rendermode
+        if (input_material.set_rendermode)
+        {
+            cur_flags |= MaterialFlags::set_rendermode;
+            append_material_data_bswap(&input_material.rendermode, sizeof(input_material.rendermode));
+            cur_gfx_length++;
+        }
+
+        // Write color combiner
+        if (input_material.set_combiner)
+        {
+            cur_flags |= MaterialFlags::set_combiner;
+            append_material_data_bswap(&input_material.combiner, sizeof(input_material.combiner));
+            cur_gfx_length++;
+        }
+
+        // Write env color
+        if (input_material.set_env)
+        {
+            cur_flags |= MaterialFlags::set_env;
+            append_material_data(input_material.env_color.data(),input_material.env_color.size());
+            cur_gfx_length++;
+        }
+
+        // Write prim color
+        if (input_material.set_prim)
+        {
+            cur_flags |= MaterialFlags::set_prim;
+            append_material_data(input_material.prim_color.data(),input_material.prim_color.size());
+            cur_gfx_length++;
+        }
+
         // Align to the material header's alignment
         std::streampos material_pos = round_up<alignof(OutputMaterialHeader)>(model_file.tellp());
         model_file.seekp(material_pos);
         OutputMaterialHeader output_material {
-            MaterialFlags::none, // flags
-            4, // gfx length (TODO)
+            cur_flags, // flags
+            static_cast<uint8_t>(cur_gfx_length), // gfx length
             0, // alignment padding
             0 // pointer used at runtime
         };
         output_material.swap_endianness();
         model_file.write(reinterpret_cast<const char*>(&output_material), sizeof(OutputMaterialHeader));
+        model_file.write(material_data.data(), material_data.size());
         output_material_array[mat_idx] = ::swap_endianness(static_cast<uint32_t>(material_pos));
     }
 

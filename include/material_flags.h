@@ -6,12 +6,13 @@
 #include <bswap.h>
 
 enum class MaterialFlags : uint8_t {
-    none         = 0,
-    set_combiner = 1,
-    set_env      = 2,
-    set_prim     = 3,
-    tex0         = 4,
-    tex1         = 5,
+    none           = 0,
+    set_rendermode = 1,
+    set_combiner   = 2,
+    set_env        = 4,
+    set_prim       = 8,
+    tex0           = 16,
+    tex1           = 32,
 };
 
 constexpr MaterialFlags operator&(MaterialFlags lhs, MaterialFlags rhs)
