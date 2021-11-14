@@ -5,6 +5,8 @@
 #include <unordered_map>
 
 inline std::string gtlf64_extension = "N64_materials_gltf64";
+inline std::string gltf64_texture_extension = "N64_texture_inputs";
+inline std::string gltf64_image_extension = "N64_image_format";
 
 inline std::unordered_map<std::string, uint8_t> color_combiner_inputs {
     {"COMBINED",        0 },

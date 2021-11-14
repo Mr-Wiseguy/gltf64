@@ -16,6 +16,9 @@ constexpr char invalid_rendermode_flags[] = "Invalid render mode flags in materi
 constexpr char invalid_rendermode_zmode[] = "Invalid render mode Z mode in material {}";
 constexpr char invalid_rendermode_cvg_dst[] = "Invalid render mode cvgDst in material {}";
 constexpr char invalid_rendermode_blender[] = "Invalid blender in material {}";
+constexpr char malformed_texture_inputs[] = "Malformed glTF64 texture input data in material {}";
+constexpr char invalid_tex[2][28] = {"Invalid tex0 in material {}", "Invalid tex1 in material {}"};
+constexpr char invalid_tex_index[2][34] = {"Invalid tex0 index in material {}", "Invalid tex1 index in material {}"};
 
 static uint64_t build_combiner(const std::array<uint8_t, 16> values)
 {
@@ -148,7 +151,150 @@ static void read_rendermode(const tinygltf::Material& input_mat, const tinygltf:
     }
 }
 
-void read_gltf64_material(const tinygltf::Material& input_mat, const tinygltf::Value& ext_data, N64Material& output_mat)
+static void read_clamp_wrap_mirror(int sampler_wrap, N64Texture& output_tex, int coord_index)
+{
+    switch (sampler_wrap)
+    {
+        case TINYGLTF_TEXTURE_WRAP_REPEAT:
+            output_tex.wrap[coord_index] = true;
+            output_tex.mirror[coord_index] = false;
+            break;
+        case TINYGLTF_TEXTURE_WRAP_MIRRORED_REPEAT:
+            output_tex.wrap[coord_index] = true;
+            output_tex.mirror[coord_index] = true;
+            break;
+        case TINYGLTF_TEXTURE_WRAP_CLAMP_TO_EDGE:
+            output_tex.wrap[coord_index] = false;
+            output_tex.mirror[coord_index] = false;
+            break;
+    }
+}
+
+constexpr unsigned int log2_round_up(unsigned int x)
+{
+    // Get the number of leading zeroes
+    unsigned int num_zeroes = std::countl_zero(x);
+    // Subtract that from the total bit count to get the bit width of the number
+    unsigned int width = sizeof(x) * 8 - num_zeroes;
+    // If x is already a power of 2, return one less than the width
+    if (std::popcount(x) == 1)
+    {
+        return width - 1;
+    }
+    // Otherwise return the width as is
+    else
+    {
+        return width;
+    }
+}
+
+
+static void read_gltf64_texture_index(const tinygltf::Model& model, const tinygltf::Material& input_mat, const tinygltf::Value& tex_ext_data, N64Material& output_mat, int index)
+{
+    const auto& tex_val = tex_ext_data.Get(fmt::format("tex{}", index));
+    if (tex_val.Type() != tinygltf::NULL_TYPE)
+    {
+        // fmt::print("Material {} has texture {}\n", input_mat.name, index);
+        output_mat.set_tex[index] = true;
+        if (!tex_val.IsObject())
+        {
+            throw_material_error(input_mat, invalid_tex[index]);
+        }
+        const auto& tex_index_val = tex_val.Get("index");
+        if (tex_index_val.Type() != tinygltf::INT_TYPE)
+        {
+            throw_material_error(input_mat, invalid_tex_index[index]);
+        }
+        int tex_index = tex_index_val.GetNumberAsInt();
+        const auto& tex = model.textures[tex_index];
+        int sampler_index = tex.sampler;
+        int image_index = tex.source;
+        const auto& sampler = model.samplers[sampler_index];
+        const auto& image = model.images[image_index];
+
+        // TODO remap images indices when there are images not used in the N64 model
+        // Currently all images in the glTF model are assumed to be in the N64 model, but this will not be the case
+        // if pbr textures are used for the glTF.
+        output_mat.textures[index].image_index = image_index;
+
+        // Get image dimensions
+        output_mat.textures[index].image_width = image.width;
+        output_mat.textures[index].image_height = image.height;
+
+        // Get texture clamp/wrap/mirror
+        read_clamp_wrap_mirror(sampler.wrapS, output_mat.textures[index], 0);
+        read_clamp_wrap_mirror(sampler.wrapT, output_mat.textures[index], 1);
+
+        // Set mask to log2 of image size
+        // TODO read mask from sampler extension
+        output_mat.textures[index].mask[0] = log2_round_up(image.width);
+        output_mat.textures[index].mask[1] = log2_round_up(image.height);
+    }
+    else
+    {
+        output_mat.set_tex[index] = false;
+        // fmt::print("Material {} does not have texture {}\n", input_mat.name, index);
+    }
+}
+
+static void read_gltf64_textures(const tinygltf::Model& model, const tinygltf::Material& input_mat, const tinygltf::Value& tex_ext_data, N64Material& output_mat)
+{
+    if (!tex_ext_data.IsObject())
+    {
+        throw_material_error(input_mat, malformed_texture_inputs);
+    }
+
+    // Read tex0
+    read_gltf64_texture_index(model, input_mat, tex_ext_data, output_mat, 0);
+    // Read tex1
+    read_gltf64_texture_index(model, input_mat, tex_ext_data, output_mat, 1);
+}
+
+static void read_standard_textures(const tinygltf::Model& model, const tinygltf::Material& input_mat, N64Material& output_mat)
+{
+    int tex_index = input_mat.pbrMetallicRoughness.baseColorTexture.index;
+    if (tex_index != -1)
+    {
+        output_mat.set_tex[0] = true;
+        
+        const auto& tex = model.textures[tex_index];
+        int sampler_index = tex.sampler;
+        int image_index = tex.source;
+        const auto& sampler = model.samplers[sampler_index];
+        const auto& image = model.images[image_index];
+
+        // Get image dimensions
+        output_mat.textures[0].image_width = image.width;
+        output_mat.textures[0].image_height = image.height;
+        
+        // Get texture clamp/wrap/mirror
+        read_clamp_wrap_mirror(sampler.wrapS, output_mat.textures[0], 0);
+        read_clamp_wrap_mirror(sampler.wrapT, output_mat.textures[0], 1);
+    }
+    else
+    {
+        output_mat.set_tex[0] = false;
+    }
+
+    output_mat.set_tex[1] = false;
+}
+
+void read_textures(const tinygltf::Model& model, const tinygltf::Material& input_mat, N64Material& output_mat)
+{
+    auto ext_it = input_mat.pbrMetallicRoughness.extensions.find(gltf64_texture_extension);
+    if (ext_it != input_mat.pbrMetallicRoughness.extensions.end())
+    {
+        // fmt::print("Reading gltf64 textures for material {}\n", input_mat.name);
+        read_gltf64_textures(model, input_mat, ext_it->second, output_mat);
+    }
+    else
+    {
+        // fmt::print("Reading standard textures for material {}\n", input_mat.name);
+        read_standard_textures(model, input_mat, output_mat);
+    }
+}
+
+void read_gltf64_material(const tinygltf::Model& model, const tinygltf::Material& input_mat, const tinygltf::Value& ext_data, N64Material& output_mat)
 {
     if (!ext_data.IsObject())
     {
@@ -259,10 +405,11 @@ void read_gltf64_material(const tinygltf::Material& input_mat, const tinygltf::V
         output_mat.draw_layer = layer_it->second;
     }
 
+    read_textures(model, input_mat, output_mat);
     read_rendermode(input_mat, ext_data, output_mat);
 }
 
-void read_standard_material(const tinygltf::Material& input_mat, N64Material& output_mat)
+void read_standard_material(const tinygltf::Model& model, const tinygltf::Material& input_mat, N64Material& output_mat)
 {
     if (input_mat.alphaMode == "OPAQUE")
     {
@@ -276,4 +423,5 @@ void read_standard_material(const tinygltf::Material& input_mat, N64Material& ou
     {
         output_mat.draw_layer = DrawLayer::tex_edge;
     }
+    read_textures(model, input_mat, output_mat);
 }

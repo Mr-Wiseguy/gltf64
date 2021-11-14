@@ -117,22 +117,69 @@ struct OutputJoint {
     }
 };
 
+namespace N64TextureEnums {
+    enum FormatType {
+        Format_RGBA = 0,
+        Format_YUV = 1,
+        Format_CI = 2,
+        Format_IA = 3,
+        Format_I = 4
+    };
+
+    enum FormatSize {
+        Format_4b = 0,
+        Format_8b = 1,
+        Format_16b = 2,
+        Format_32b = 3
+    };
+
+    enum ClampWrapMirror {
+        Wrap =   0,
+        Mirror = 1,
+        Clamp =  2,
+    };
+}
+
+struct OutputTexture {
+    uint16_t image_index;
+    uint16_t image_width;
+    uint16_t image_height;
+    uint16_t tmem_word_address;
+    uint8_t image_format; // upper 4 bits are type, lower 4 bits are size
+    uint8_t clamp_wrap_mirror; // upper 4 bits are t, lower 4 bits are s
+    uint8_t mask_shift_s; // upper 4 bits are mask, lower 4 bits are shift
+    uint8_t mask_shift_t; // upper 4 bits are mask, lower 4 bits are shift
+
+    void swap_endianness() noexcept
+    {
+        image_index = ::swap_endianness(image_index);
+        image_width = ::swap_endianness(image_width);
+        image_height = ::swap_endianness(image_height);
+        tmem_word_address = ::swap_endianness(tmem_word_address);
+    }
+};
+
 struct OutputModel {
     uint16_t num_joints;
     uint16_t num_materials;
+    uint16_t num_images;
+    uint16_t padding; // Would be automatically added for alignment
     uint32_t joints_offset; // File offset for joint array
     uint32_t materials_offset; // File offset for material pointer array
     uint32_t vertex_offset; // File offset for vertex array
+    uint32_t images_offset; // File offset for image path array
     uint32_t gfx; // Pointer used at runtime
 
     void swap_endianness() noexcept
     {
         num_joints = ::swap_endianness(num_joints);
         num_materials = ::swap_endianness(num_materials);
+        num_images = ::swap_endianness(num_images);
 
         joints_offset = ::swap_endianness(joints_offset);
         materials_offset = ::swap_endianness(materials_offset);
         vertex_offset = ::swap_endianness(vertex_offset);
+        images_offset = ::swap_endianness(images_offset);
     }
 };
 

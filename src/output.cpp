@@ -33,7 +33,119 @@ std::streampos skip_array(std::ofstream& file, size_t length)
     return ret;
 }
 
-void write_model_file(const std::filesystem::path& file_path, const N64Model& input_model)
+N64TextureEnums::ClampWrapMirror get_clamp_wrap_mirror(const N64Texture& texture, int coord_index)
+{
+    if (!texture.wrap[coord_index])
+    {
+        return N64TextureEnums::ClampWrapMirror::Clamp;
+    }
+    else if (texture.mirror[coord_index])
+    {
+        return N64TextureEnums::ClampWrapMirror::Mirror;
+    }
+    else
+    {
+        return N64TextureEnums::ClampWrapMirror::Wrap;
+    }
+}
+
+int write_texture_data(std::vector<char>& material_data, const N64Texture& texture, const dynamic_array<std::pair<std::string, N64ImageFormat>>& image_paths_formats, int tmem_address)
+{
+    OutputTexture output;
+    N64ImageFormat image_format = image_paths_formats[texture.image_index].second;
+
+    N64TextureEnums::FormatSize format_size;
+    N64TextureEnums::FormatType format_type;
+
+    switch (image_format)
+    {
+        case N64ImageFormat::CI4:
+            format_size = N64TextureEnums::FormatSize::Format_4b;
+            format_type = N64TextureEnums::FormatType::Format_CI;
+            break;
+        case N64ImageFormat::I4:
+            format_size = N64TextureEnums::FormatSize::Format_4b;
+            format_type = N64TextureEnums::FormatType::Format_I;
+            break;
+        case N64ImageFormat::IA4:
+            format_size = N64TextureEnums::FormatSize::Format_4b;
+            format_type = N64TextureEnums::FormatType::Format_IA;
+            break;
+        case N64ImageFormat::CI8:
+            format_size = N64TextureEnums::FormatSize::Format_8b;
+            format_type = N64TextureEnums::FormatType::Format_CI;
+            break;
+        case N64ImageFormat::I8:
+            format_size = N64TextureEnums::FormatSize::Format_8b;
+            format_type = N64TextureEnums::FormatType::Format_I;
+            break;
+        case N64ImageFormat::IA8:
+            format_size = N64TextureEnums::FormatSize::Format_8b;
+            format_type = N64TextureEnums::FormatType::Format_IA;
+            break;
+        case N64ImageFormat::IA16:
+            format_size = N64TextureEnums::FormatSize::Format_16b;
+            format_type = N64TextureEnums::FormatType::Format_IA;
+            break;
+        case N64ImageFormat::RGBA16:
+            format_size = N64TextureEnums::FormatSize::Format_16b;
+            format_type = N64TextureEnums::FormatType::Format_RGBA;
+            break;
+        case N64ImageFormat::RGBA32:
+            format_size = N64TextureEnums::FormatSize::Format_32b;
+            format_type = N64TextureEnums::FormatType::Format_RGBA;
+            break;
+        case N64ImageFormat::YUV16:
+            format_size = N64TextureEnums::FormatSize::Format_16b;
+            format_type = N64TextureEnums::FormatType::Format_YUV;
+            break;
+        default:
+            fmt::print(stderr, "Internal Error: Invalid format type for image (this error should never appear)\n");
+            std::exit(EXIT_FAILURE);
+            break;
+    }
+
+    N64TextureEnums::ClampWrapMirror cwm_s = get_clamp_wrap_mirror(texture, 0);
+    N64TextureEnums::ClampWrapMirror cwm_t = get_clamp_wrap_mirror(texture, 1);
+
+    output.image_index = texture.image_index;
+    output.image_width = texture.image_width;
+    output.image_height = texture.image_height;
+    output.tmem_word_address = tmem_address / 8;
+    output.image_format = (format_type << 4) | format_size;
+    output.clamp_wrap_mirror = (cwm_t << 4) | cwm_s;
+    output.mask_shift_s = (texture.mask[0] << 4) | 0;
+    output.mask_shift_t = (texture.mask[1] << 4) | 0;
+
+    output.swap_endianness();
+    std::copy_n(reinterpret_cast<const char*>(&output), sizeof(output), std::back_inserter(material_data));
+
+    int tmem_size = texture.image_width * texture.image_height;
+
+    switch (format_type)
+    {
+        case N64TextureEnums::FormatSize::Format_4b:
+            tmem_size = (tmem_size + 1) / 2; // round up divide by 2
+            break;
+        case N64TextureEnums::FormatSize::Format_8b:
+            break;
+        case N64TextureEnums::FormatSize::Format_16b:
+            tmem_size *= 2;
+            break;
+        case N64TextureEnums::FormatSize::Format_32b:
+            tmem_size *= 4;
+            break;
+        default:
+            fmt::print(stderr, "Internal Error: Invalid format size for image (this error should never appear)\n");
+            std::exit(EXIT_FAILURE);
+            break;
+    }
+
+    // Ensure that the next texture is word aligned
+    return tmem_address + round_up<4>(tmem_size);
+}
+
+void write_model_file(const std::filesystem::path& file_path, const N64Model& input_model, const dynamic_array<std::pair<std::string, N64ImageFormat>>& image_paths_formats)
 {
     // Allocate a buffer for file writing to increase performance
     std::unique_ptr<char[]> write_buf = std::make_unique<char[]>(write_buf_size);
@@ -154,7 +266,7 @@ void write_model_file(const std::filesystem::path& file_path, const N64Model& in
                             auto ret = OutputVertex {
                                 input_vert.pos, // pos
                                 0, // flag
-                                { std::lround(input_vert.texcoords[0]) << 10, std::lround(input_vert.texcoords[1]) << 10 }, // st
+                                { std::lround(input_vert.texcoords[0] * 32.0f), std::lround(input_vert.texcoords[1] * 32.0f) }, // st
                                 input_vert.norm // rgba
                             };
                             ret.swap_endianness();
@@ -277,6 +389,24 @@ void write_model_file(const std::filesystem::path& file_path, const N64Model& in
             cur_gfx_length++;
         }
 
+        int tmem_address = 0;
+
+        // Write tex0
+        if (input_material.set_tex[0])
+        {
+            cur_flags |= MaterialFlags::tex0;
+            tmem_address = write_texture_data(material_data, input_material.textures[0], image_paths_formats, 0);
+            cur_gfx_length += 7;
+        }
+
+        // Write tex1
+        if (input_material.set_tex[1])
+        {
+            cur_flags |= MaterialFlags::tex1;
+            write_texture_data(material_data, input_material.textures[1], image_paths_formats, tmem_address);
+            cur_gfx_length += 7;
+        }
+
         // Align to the material header's alignment
         std::streampos material_pos = round_up<alignof(OutputMaterialHeader)>(model_file.tellp());
         model_file.seekp(material_pos);
@@ -292,9 +422,36 @@ void write_model_file(const std::filesystem::path& file_path, const N64Model& in
         output_material_array[mat_idx] = ::swap_endianness(static_cast<uint32_t>(material_pos));
     }
 
+    // Record the file position after the materials for writing the image array later
+    std::streampos material_end_pos = model_file.tellp();
+
     // Write the material offset array
     model_file.seekp(material_array_pos);
     model_file.write(reinterpret_cast<const char*>(output_material_array.data()), num_materials * sizeof(output_material_array[0]));
+
+    ////////////
+    // Images //
+    ////////////
+
+    size_t num_images = image_paths_formats.size();
+
+    // Seek back to after the materials to write the image array and image paths
+    model_file.seekp(material_end_pos);
+    std::streampos image_array_pos = skip_array<uint32_t>(model_file, num_images);
+    output_model.num_images = num_images;
+    output_model.images_offset = image_array_pos;
+
+    // Write the image paths
+    dynamic_array<uint32_t> image_offsets(num_images);
+    for (size_t image_idx = 0; image_idx < num_images; image_idx++)
+    {
+        image_offsets[image_idx] = ::swap_endianness(static_cast<uint32_t>(model_file.tellp()));
+        model_file.write(image_paths_formats[image_idx].first.c_str(), image_paths_formats[image_idx].first.length() + 1);
+    }
+    
+    // Seek back to the image array position and write the array
+    model_file.seekp(image_array_pos);
+    model_file.write(reinterpret_cast<const char*>(image_offsets.data()), num_images * sizeof(image_offsets[0]));
 
     // Return to the beginning of the file and write the model
     model_file.seekp(0);

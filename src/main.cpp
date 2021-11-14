@@ -25,6 +25,8 @@
 
 #include <n64model.h>
 #include <materials.h>
+#include <images.h>
+#include <gltf64constants.h>
 
 float n64_scale = 100.0f;
 
@@ -220,6 +222,25 @@ void populate_verts_triangles(const tinygltf::Model& model, vertex_array& verts,
             {
                 continue;
             }
+            float s_scale = 1.0f;
+            float t_scale = 1.0f;
+
+            // Read the primitive's material into a temporary N64Material for the purposes of extracting image width/height
+            // This is needed to scale texcoords appropriately
+            N64Material temp_mat;
+            read_textures(model, model.materials[primitive.material], temp_mat);
+
+            if (temp_mat.set_tex[0])
+            {
+                s_scale = temp_mat.textures[0].image_width;
+                t_scale = temp_mat.textures[0].image_height;
+            }
+            else if (temp_mat.set_tex[1])
+            {
+                s_scale = temp_mat.textures[1].image_width;
+                t_scale = temp_mat.textures[1].image_height;
+            }
+
             // Get the number of indices in this primtiive
             int indices_index = primitive.indices;
             const auto& indices_accessor = model.accessors[indices_index];
@@ -284,6 +305,15 @@ void populate_verts_triangles(const tinygltf::Model& model, vertex_array& verts,
                 cur_vert.norm[2] = meshopt_quantizeSnorm(norm_transformed[2], 8);
                 cur_vert.norm[3] = 0;
             });
+            
+            // Read texcoords
+            gltf_foreach_attribute<float>("TEXCOORD_0", model, attributes,
+            [&](size_t vert_index, float* texcoords)
+            {
+                auto& cur_vert = verts[vert_count + vert_index];
+                cur_vert.texcoords[0] = texcoords[0] * s_scale;
+                cur_vert.texcoords[1] = texcoords[1] * t_scale;
+            });
 
             // Read positions, adding the corresponding joint's offset
             gltf_foreach<float>(model, pos_accessor, 
@@ -318,12 +348,12 @@ material_array read_materials(const tinygltf::Model& model)
         if (ext_it != input_mat.extensions.end())
         {
             // fmt::print("glTF64 material: {}\n", input_mat.name);
-            read_gltf64_material(input_mat, ext_it->second, output_mat);
+            read_gltf64_material(model, input_mat, ext_it->second, output_mat);
         }
         else
         {
             // fmt::print("Standard material: {}\n", input_mat.name);
-            read_standard_material(input_mat, output_mat);
+            read_standard_material(model, input_mat, output_mat);
         }
         // fmt::print("Draw layer: {}\n", output_mat.draw_layer);
     }
@@ -1410,18 +1440,23 @@ struct fmt::formatter<glm::vec<3,T,P>> {
 
 int main(int argc, char *argv[])
 {
-    if (argc != 3 && argc != 4)
+    if (argc < 3 || argc > 5)
     {
-        fmt::print("Usage: {} [Input glTF] [Output N64 Model] [Scale (optional, default = 100)]\n", argv[0]);
+        fmt::print("Usage: {} [Input glTF] [Output N64 Model] [Asset root folder(optional, default = working directory)] [Scale (optional, default = 100)]\n", argv[0]);
         return EXIT_SUCCESS;
     }
 
     const char *gltf_path = argv[1];
     const char *output_path = argv[2];
-    float scale = 100.0f;
-    if (argc == 4)
+    std::filesystem::path asset_path = std::filesystem::current_path().c_str();
+    if (argc >= 4)
     {
-        const char *scale_str = argv[3];
+        asset_path = argv[3];
+    }
+    float scale = 100.0f;
+    if (argc >= 5)
+    {
+        const char *scale_str = argv[4];
         char *scale_end;
         scale = strtof(scale_str, &scale_end);
         if (scale_end != (scale_str + strlen(scale_str)))
@@ -1456,9 +1491,10 @@ int main(int argc, char *argv[])
 
     // fmt::print("Meshes: {}\n", model.meshes.size());
 
+    dynamic_array<std::pair<std::string, N64ImageFormat>> image_paths_formats = convert_images(model, gltf_path, output_path, asset_path);
     N64Model n64model = create_model(model, scale);
 
-    write_model_file(output_path, n64model);
+    write_model_file(output_path, n64model, image_paths_formats);
 
     // fmt::print("Verts: {} Triangles: {}\n", n64model.num_verts(), n64model.num_triangles());
 

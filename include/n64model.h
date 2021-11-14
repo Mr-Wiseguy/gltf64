@@ -10,6 +10,7 @@
 
 #include <dynamic_array.h>
 #include <gltf64constants.h>
+#include <images.h>
 
 using index_type = int;
 using buffer_index_type = int;
@@ -74,17 +75,29 @@ struct N64Vertex {
     bool lit;
 };
 
+// Contains the info needed to load and render a given image
+struct N64Texture {
+    uint16_t image_index;
+    uint16_t image_width;
+    uint16_t image_height;
+    bool wrap[2];
+    bool mirror[2];
+    uint8_t mask[2];
+};
+
 struct N64Material {
     DrawLayer draw_layer;
     uint64_t combiner;
     uint64_t rendermode;
     std::array<uint8_t, 4> env_color;
     std::array<uint8_t, 4> prim_color;
+    std::array<N64Texture, 2> textures;
 
     bool set_combiner;
     bool set_rendermode;
     bool set_env;
     bool set_prim;
+    bool set_tex[2];
 };
 
 using vertex_array = dynamic_array<N64Vertex>;
@@ -435,6 +448,6 @@ private:
     dynamic_array<N64Material> materials_;
 };
 
-void write_model_file(const std::filesystem::path& file_path, const N64Model& input_model);
+void write_model_file(const std::filesystem::path& file_path, const N64Model& input_model, const dynamic_array<std::pair<std::string, N64ImageFormat>>& image_paths);
 
 #endif

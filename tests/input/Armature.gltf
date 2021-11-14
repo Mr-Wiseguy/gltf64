@@ -6,7 +6,7 @@
     "extensionsUsed" : [
         "N64_materials_gltf64",
         "N64_texture_inputs",
-        "N64_sampler_format"
+        "N64_image_format"
     ],
     "scene" : 0,
     "scenes" : [
@@ -7848,6 +7848,11 @@
     ],
     "images" : [
         {
+            "extensions" : {
+                "N64_image_format" : {
+                    "format" : "I8"
+                }
+            },
             "mimeType" : "image/png",
             "name" : "Face",
             "uri" : "Face.png"
@@ -14636,22 +14641,12 @@
     ],
     "samplers" : [
         {
-            "extensions" : {
-                "N64_sampler_format" : {
-                    "format" : "I8"
-                }
-            },
             "magFilter" : 9729,
             "minFilter" : 9987,
             "wrapS" : 33648,
             "wrapT" : 10497
         },
         {
-            "extensions" : {
-                "N64_sampler_format" : {
-                    "format" : "I8"
-                }
-            },
             "magFilter" : 9729,
             "minFilter" : 9987,
             "wrapS" : 33071,
