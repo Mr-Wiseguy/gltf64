@@ -98,6 +98,7 @@ struct N64Material {
     bool set_env;
     bool set_prim;
     bool set_tex[2];
+    bool filter_nearest;
 };
 
 using vertex_array = dynamic_array<N64Vertex>;

@@ -170,6 +170,11 @@ static void read_clamp_wrap_mirror(int sampler_wrap, N64Texture& output_tex, int
     }
 }
 
+static void read_filtering(int mag_filter, N64Material& output_mat)
+{
+    output_mat.filter_nearest = (mag_filter == TINYGLTF_TEXTURE_FILTER_NEAREST);
+}
+
 constexpr unsigned int log2_round_up(unsigned int x)
 {
     // Get the number of leading zeroes
@@ -229,6 +234,10 @@ static void read_gltf64_texture_index(const tinygltf::Model& model, const tinygl
         // TODO read mask from sampler extension
         output_mat.textures[index].mask[0] = log2_round_up(image.width);
         output_mat.textures[index].mask[1] = log2_round_up(image.height);
+        if (index == 0)
+        {
+            read_filtering(sampler.magFilter, output_mat);
+        }
     }
     else
     {
@@ -270,6 +279,7 @@ static void read_standard_textures(const tinygltf::Model& model, const tinygltf:
         // Get texture clamp/wrap/mirror
         read_clamp_wrap_mirror(sampler.wrapS, output_mat.textures[0], 0);
         read_clamp_wrap_mirror(sampler.wrapT, output_mat.textures[0], 1);
+        read_filtering(sampler.magFilter, output_mat);
     }
     else
     {
@@ -364,7 +374,7 @@ void read_gltf64_material(const tinygltf::Model& model, const tinygltf::Material
     const auto& prim_color_val = ext_data.Get("primColor");
     if (prim_color_val.Type() != tinygltf::NULL_TYPE)
     {
-        output_mat.set_env = true;
+        output_mat.set_prim = true;
         if (!prim_color_val.IsArray())
         {
             throw_material_error(input_mat, invalid_env);

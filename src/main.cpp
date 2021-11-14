@@ -224,6 +224,8 @@ void populate_verts_triangles(const tinygltf::Model& model, vertex_array& verts,
             }
             float s_scale = 1.0f;
             float t_scale = 1.0f;
+            float s_offset = 0.0f;
+            float t_offset = 0.0f;
 
             // Read the primitive's material into a temporary N64Material for the purposes of extracting image width/height
             // This is needed to scale texcoords appropriately
@@ -239,6 +241,12 @@ void populate_verts_triangles(const tinygltf::Model& model, vertex_array& verts,
             {
                 s_scale = temp_mat.textures[1].image_width;
                 t_scale = temp_mat.textures[1].image_height;
+            }
+
+            if (!temp_mat.filter_nearest)
+            {
+                s_offset = -0.5f;
+                t_offset = -0.5f;
             }
 
             // Get the number of indices in this primtiive
@@ -311,8 +319,8 @@ void populate_verts_triangles(const tinygltf::Model& model, vertex_array& verts,
             [&](size_t vert_index, float* texcoords)
             {
                 auto& cur_vert = verts[vert_count + vert_index];
-                cur_vert.texcoords[0] = texcoords[0] * s_scale;
-                cur_vert.texcoords[1] = texcoords[1] * t_scale;
+                cur_vert.texcoords[0] = texcoords[0] * s_scale + s_offset;
+                cur_vert.texcoords[1] = texcoords[1] * t_scale + t_offset;
             });
 
             // Read positions, adding the corresponding joint's offset
