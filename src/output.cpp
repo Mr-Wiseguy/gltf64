@@ -122,7 +122,7 @@ int write_texture_data(std::vector<char>& material_data, const N64Texture& textu
 
     int tmem_size = texture.image_width * texture.image_height;
 
-    switch (format_type)
+    switch (format_size)
     {
         case N64TextureEnums::FormatSize::Format_4b:
             tmem_size = (tmem_size + 1) / 2; // round up divide by 2
@@ -136,7 +136,7 @@ int write_texture_data(std::vector<char>& material_data, const N64Texture& textu
             tmem_size *= 4;
             break;
         default:
-            fmt::print(stderr, "Internal Error: Invalid format size for image (this error should never appear)\n");
+            fmt::print(stderr, "Internal Error: Invalid format size for image: {} (this error should never appear)\n", format_size);
             std::exit(EXIT_FAILURE);
             break;
     }

@@ -123,19 +123,22 @@ dynamic_array<std::pair<std::string, N64ImageFormat>> convert_images(
         int convert_result;
         // n64graphics is picky about PNG color types, so choose one based on image format
         // Select the grayscale + alpha PNG color type if the image is an intensity one
+        std::string convert_callstring;
         if (image_format.first[0] == 'i')
         {
-            convert_result = std::system(fmt::format(
-                "convert {} -colorspace RGB -define png:color-type=4 {}", image_input_path.c_str(), image_linear_path.c_str()
-            ).c_str());
+            convert_callstring = fmt::format(
+                "convert {} -colorspace RGB -set colorspace Gray -separate -average -define png:color-type=4 {}", image_input_path.c_str(), image_linear_path.c_str()
+            );
         }
         // Otherwise select rgb triple + alpha PNG color type
         else
         {
-            convert_result = std::system(fmt::format(
+            convert_callstring = fmt::format(
                 "convert {} -colorspace RGB -define png:color-type=6 {}", image_input_path.c_str(), image_linear_path.c_str()
-            ).c_str());
+            );
         }
+        // fmt::print("convert callstring: `{}`\n", convert_callstring);
+        convert_result = std::system(convert_callstring.c_str());
         if (convert_result != EXIT_SUCCESS)
         {
             fmt::print("Failed to linearize image {} (is imagemagick installed?)\n", cur_image.name);
@@ -143,10 +146,13 @@ dynamic_array<std::pair<std::string, N64ImageFormat>> convert_images(
             std::exit(EXIT_FAILURE);
         }
 
-        // Convert the linear image to an N64 image
-        int n64graphics_result = std::system(fmt::format(
+        std::string n64graphics_callstring = fmt::format(
             "n64graphics -i {} -g {} -f {}", image_output_path.c_str(), image_linear_path.c_str(), image_format.first
-        ).c_str());
+        );
+
+        // fmt::print("n64graphics callstring: `{}`\n", n64graphics_callstring);
+        // Convert the linear image to an N64 image
+        int n64graphics_result = std::system(n64graphics_callstring.c_str());
         fs::remove(image_linear_path);
         if (n64graphics_result != EXIT_SUCCESS)
         {
