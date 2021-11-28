@@ -16,6 +16,9 @@ constexpr char invalid_rendermode_flags[] = "Invalid render mode flags in materi
 constexpr char invalid_rendermode_zmode[] = "Invalid render mode Z mode in material {}";
 constexpr char invalid_rendermode_cvg_dst[] = "Invalid render mode cvgDst in material {}";
 constexpr char invalid_rendermode_blender[] = "Invalid blender in material {}";
+constexpr char invalid_geometry_mode[] = "Invalid geometry mode in material {}";
+constexpr char invalid_othermode[] = "Invalid othermodeH in material {}";
+constexpr char invalid_othermode_flag[] = "Unknown othermodeH flag in material {}";
 constexpr char malformed_texture_inputs[] = "Malformed glTF64 texture input data in material {}";
 constexpr char invalid_tex[2][28] = {"Invalid tex0 in material {}", "Invalid tex1 in material {}"};
 constexpr char invalid_tex_index[2][34] = {"Invalid tex0 index in material {}", "Invalid tex1 index in material {}"};
@@ -148,6 +151,40 @@ static void read_rendermode(const tinygltf::Material& input_mat, const tinygltf:
         fmt::print("rendermode: {:<16X}\n", rendermode_command);
         
         output_mat.rendermode = rendermode_command;
+    }
+}
+
+static void read_othermode_h(const tinygltf::Material& input_mat, const tinygltf::Value& ext_data, N64Material& output_mat)
+{
+    // Read rendermode
+    const auto& othermode_val = ext_data.Get("othermodeH");
+    if (othermode_val.Type() != tinygltf::NULL_TYPE)
+    {
+        if (!othermode_val.IsArray())
+        {
+            throw_material_error(input_mat, invalid_othermode);
+        }
+
+        for (const tinygltf::Value& othermode_flag_val : othermode_val.Get<tinygltf::Value::Array>())
+        {
+            if (!othermode_flag_val.IsString())
+            {
+                throw_material_error(input_mat, invalid_othermode);
+            }
+            std::string othermode_flag = othermode_flag_val.Get<std::string>();
+            if (othermode_flag == "two_cycle")
+            {
+                output_mat.two_cycle = true;
+            }
+            else if (othermode_flag == "point_filter")
+            {
+                output_mat.point_filtered = true;
+            }
+            else
+            {
+                throw_material_error(input_mat, invalid_othermode_flag);
+            }
+        }
     }
 }
 
@@ -415,8 +452,23 @@ void read_gltf64_material(const tinygltf::Model& model, const tinygltf::Material
         output_mat.draw_layer = layer_it->second;
     }
 
+    // Read geometry mode
+    const auto& geo_mode_val = ext_data.Get("geometryMode");
+    if (geo_mode_val.Type() != tinygltf::NULL_TYPE)
+    {
+        output_mat.set_geometry_mode = true;
+        if (!geo_mode_val.IsInt())
+        {
+            throw_material_error(input_mat, invalid_geometry_mode);
+        }
+
+        int geo_mode = geo_mode_val.GetNumberAsInt();
+        output_mat.geometry_mode = geo_mode;
+    }
+
     read_textures(model, input_mat, output_mat);
     read_rendermode(input_mat, ext_data, output_mat);
+    read_othermode_h(input_mat, ext_data, output_mat);
 }
 
 void read_standard_material(const tinygltf::Model& model, const tinygltf::Material& input_mat, N64Material& output_mat)

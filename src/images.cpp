@@ -124,7 +124,7 @@ dynamic_array<std::pair<std::string, N64ImageFormat>> convert_images(
         // n64graphics is picky about PNG color types, so choose one based on image format
         // Select the grayscale + alpha PNG color type if the image is an intensity one
         std::string convert_callstring;
-        if (image_format.first[0] == 'i')
+        if (image_format.first[0] == 'i' && image_format.first[1] != 'a')
         {
             convert_callstring = fmt::format(
                 "convert {} -colorspace RGB -set colorspace Gray -separate -average -define png:color-type=4 {}", image_input_path.c_str(), image_linear_path.c_str()
@@ -142,7 +142,7 @@ dynamic_array<std::pair<std::string, N64ImageFormat>> convert_images(
         if (convert_result != EXIT_SUCCESS)
         {
             fmt::print("Failed to linearize image {} (is imagemagick installed?)\n", cur_image.name);
-            fs::remove(image_linear_path);
+            // fs::remove(image_linear_path);
             std::exit(EXIT_FAILURE);
         }
 
@@ -153,7 +153,7 @@ dynamic_array<std::pair<std::string, N64ImageFormat>> convert_images(
         // fmt::print("n64graphics callstring: `{}`\n", n64graphics_callstring);
         // Convert the linear image to an N64 image
         int n64graphics_result = std::system(n64graphics_callstring.c_str());
-        fs::remove(image_linear_path);
+        // fs::remove(image_linear_path);
         if (n64graphics_result != EXIT_SUCCESS)
         {
             fmt::print("Failed to convert image {} (is n64graphics installed?)\n", cur_image.name);

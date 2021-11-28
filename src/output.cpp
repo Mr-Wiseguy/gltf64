@@ -407,6 +407,41 @@ void write_model_file(const std::filesystem::path& file_path, const N64Model& in
             cur_gfx_length += 7;
         }
 
+        // Write geometry mode
+        if (input_material.set_geometry_mode)
+        {
+            cur_flags |= MaterialFlags::set_geometry_mode;
+            int32_t geometry_mode = ::swap_endianness(input_material.geometry_mode);
+            append_material_data(&geometry_mode, sizeof(geometry_mode));
+            cur_gfx_length++;
+            constexpr uint32_t G_TEXTURE_GEN = 0x00040000;
+            constexpr uint32_t G_TEXTURE_GEN_LINEAR = 0x00080000;
+            // Allocate extra gfx commands to set the texture scale for any textures if the geometry mode includes env mapping
+            if (geometry_mode & (G_TEXTURE_GEN | G_TEXTURE_GEN_LINEAR))
+            {
+                if (input_material.set_tex[0])
+                {
+                    cur_gfx_length++;
+                }
+                if (input_material.set_tex[1])
+                {
+                    cur_gfx_length++;
+                }
+            }
+        }
+
+        // OthermodeH flags
+        if (input_material.two_cycle)
+        {
+            cur_flags |= MaterialFlags::two_cycle;
+            cur_gfx_length++;
+        }
+        if (input_material.point_filtered)
+        {
+            cur_flags |= MaterialFlags::point_filter;
+            cur_gfx_length++;
+        }
+
         // Align to the material header's alignment
         std::streampos material_pos = round_up<alignof(OutputMaterialHeader)>(model_file.tellp());
         model_file.seekp(material_pos);

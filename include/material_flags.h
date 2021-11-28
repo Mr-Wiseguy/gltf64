@@ -5,14 +5,17 @@
 #include <type_traits>
 #include <bswap.h>
 
-enum class MaterialFlags : uint8_t {
-    none           = 0,
-    set_rendermode = 1,
-    set_combiner   = 2,
-    set_env        = 4,
-    set_prim       = 8,
-    tex0           = 16,
-    tex1           = 32,
+enum class MaterialFlags : uint16_t {
+    none                = 0,
+    set_rendermode      = 1,
+    set_combiner        = 2,
+    set_env             = 4,
+    set_prim            = 8,
+    tex0                = 16,
+    tex1                = 32,
+    set_geometry_mode   = 64,
+    two_cycle           = 128,
+    point_filter        = 256,
 };
 
 constexpr MaterialFlags operator&(MaterialFlags lhs, MaterialFlags rhs)

@@ -32,7 +32,7 @@ static_assert(sizeof(OutputVertex) == 0x10, "Output vertex must be 0x10 bytes");
 struct OutputMaterialHeader {
     MaterialFlags flags;
     uint8_t gfx_length;
-    uint16_t reserved; // Would be automatically added for alignment
+    uint8_t reserved; // Would be automatically added for alignment
     uint32_t gfx; // Pointer used at runtime
 
     void swap_endianness() noexcept

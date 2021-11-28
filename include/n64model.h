@@ -89,6 +89,7 @@ struct N64Material {
     DrawLayer draw_layer;
     uint64_t combiner;
     uint64_t rendermode;
+    int32_t geometry_mode;
     std::array<uint8_t, 4> env_color;
     std::array<uint8_t, 4> prim_color;
     std::array<N64Texture, 2> textures;
@@ -97,8 +98,11 @@ struct N64Material {
     bool set_rendermode;
     bool set_env;
     bool set_prim;
+    bool set_geometry_mode;
     bool set_tex[2];
     bool filter_nearest;
+    bool point_filtered;
+    bool two_cycle;
 };
 
 using vertex_array = dynamic_array<N64Vertex>;

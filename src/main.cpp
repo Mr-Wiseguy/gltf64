@@ -243,6 +243,9 @@ void populate_verts_triangles(const tinygltf::Model& model, vertex_array& verts,
                 t_scale = temp_mat.textures[1].image_height;
             }
 
+            constexpr uint32_t G_LIGHTING = 0x00020000;
+            int material_lit = (temp_mat.geometry_mode & G_LIGHTING) != 0;
+
             if (!temp_mat.filter_nearest)
             {
                 s_offset = -0.5f;
@@ -296,22 +299,44 @@ void populate_verts_triangles(const tinygltf::Model& model, vertex_array& verts,
                 verts[vert_count + vert_index].joint = vert_joints[vert_index][sorted_indices[0]];
             });
 
-            // TODO read vertex colors if the material is unlit
-            // Read normals
-            gltf_foreach_attribute<float>("NORMAL", model, attributes,
-            [&](size_t vert_index, float* norm)
+            // Determine whether to read normals or vertex colors
+            if (material_lit)
             {
-                glm::vec3 norm_transformed = *reinterpret_cast<glm::vec3*>(norm);;
-                auto& cur_vert = verts[vert_count + vert_index];
-                if (cur_vert.joint != -1)
+                // Read normals
+                gltf_foreach_attribute<float>("NORMAL", model, attributes,
+                [&](size_t vert_index, float* norm)
                 {
-                    norm_transformed = glm::mat3(inverse_joint_matrices[cur_vert.joint]) * norm_transformed;
-                    norm_transformed = glm::normalize(norm_transformed);
-                }
-                cur_vert.norm[0] = meshopt_quantizeSnorm(norm_transformed[0], 8);
-                cur_vert.norm[1] = meshopt_quantizeSnorm(norm_transformed[1], 8);
-                cur_vert.norm[2] = meshopt_quantizeSnorm(norm_transformed[2], 8);
-                cur_vert.norm[3] = 0;
+                    glm::vec3 norm_transformed = *reinterpret_cast<glm::vec3*>(norm);;
+                    auto& cur_vert = verts[vert_count + vert_index];
+                    if (cur_vert.joint != -1)
+                    {
+                        norm_transformed = glm::mat3(inverse_joint_matrices[cur_vert.joint]) * norm_transformed;
+                        norm_transformed = glm::normalize(norm_transformed);
+                    }
+                    cur_vert.norm[0] = meshopt_quantizeSnorm(norm_transformed[0], 8);
+                    cur_vert.norm[1] = meshopt_quantizeSnorm(norm_transformed[1], 8);
+                    cur_vert.norm[2] = meshopt_quantizeSnorm(norm_transformed[2], 8);
+                });
+            }
+            else
+            {
+                // Read colors
+                gltf_foreach_attribute<float>("COLOR_0", model, attributes,
+                [&](size_t vert_index, float* color)
+                {
+                    auto& cur_vert = verts[vert_count + vert_index];
+                    cur_vert.norm[0] = meshopt_quantizeUnorm(color[0], 8);
+                    cur_vert.norm[1] = meshopt_quantizeUnorm(color[1], 8);
+                    cur_vert.norm[2] = meshopt_quantizeUnorm(color[2], 8);
+                });
+            }
+
+            gltf_foreach_attribute<float>("COLOR_1", model, attributes,
+            [&](size_t vert_index, float* color)
+            {
+                auto& cur_vert = verts[vert_count + vert_index];
+                float luma = (0.2126f * color[0] + 0.7152f * color[1] + 0.0722f * color[2]);
+                cur_vert.norm[3] = meshopt_quantizeUnorm(luma, 8);
             });
             
             // Read texcoords
