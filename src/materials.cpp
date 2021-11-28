@@ -148,7 +148,7 @@ static void read_rendermode(const tinygltf::Material& input_mat, const tinygltf:
         // read blender
         rendermode_command |= get_rendermode_blender_value(input_mat, rendermode_val);
 
-        fmt::print("rendermode: {:<16X}\n", rendermode_command);
+        // fmt::print("rendermode: {:<16X}\n", rendermode_command);
         
         output_mat.rendermode = rendermode_command;
     }
@@ -341,6 +341,22 @@ void read_textures(const tinygltf::Model& model, const tinygltf::Material& input
     }
 }
 
+void read_geometry_mode(const tinygltf::Material& input_mat, const tinygltf::Value& ext_data, N64Material& output_mat)
+{
+    const auto& geo_mode_val = ext_data.Get("geometryMode");
+    if (geo_mode_val.Type() != tinygltf::NULL_TYPE)
+    {
+        output_mat.set_geometry_mode = true;
+        if (!geo_mode_val.IsInt())
+        {
+            throw_material_error(input_mat, invalid_geometry_mode);
+        }
+
+        int geo_mode = geo_mode_val.GetNumberAsInt();
+        output_mat.geometry_mode = geo_mode;
+    }
+}
+
 void read_gltf64_material(const tinygltf::Model& model, const tinygltf::Material& input_mat, const tinygltf::Value& ext_data, N64Material& output_mat)
 {
     if (!ext_data.IsObject())
@@ -452,21 +468,9 @@ void read_gltf64_material(const tinygltf::Model& model, const tinygltf::Material
         output_mat.draw_layer = layer_it->second;
     }
 
-    // Read geometry mode
-    const auto& geo_mode_val = ext_data.Get("geometryMode");
-    if (geo_mode_val.Type() != tinygltf::NULL_TYPE)
-    {
-        output_mat.set_geometry_mode = true;
-        if (!geo_mode_val.IsInt())
-        {
-            throw_material_error(input_mat, invalid_geometry_mode);
-        }
-
-        int geo_mode = geo_mode_val.GetNumberAsInt();
-        output_mat.geometry_mode = geo_mode;
-    }
 
     read_textures(model, input_mat, output_mat);
+    read_geometry_mode(input_mat, ext_data, output_mat);
     read_rendermode(input_mat, ext_data, output_mat);
     read_othermode_h(input_mat, ext_data, output_mat);
 }

@@ -211,6 +211,7 @@ void populate_verts_triangles(const tinygltf::Model& model, vertex_array& verts,
     for (auto& vert : verts)
     {
         vert.joint = -1;
+        vert.norm[4] = 0xFF;
     }
 
     for (const auto& mesh : model.meshes)
@@ -230,7 +231,19 @@ void populate_verts_triangles(const tinygltf::Model& model, vertex_array& verts,
             // Read the primitive's material into a temporary N64Material for the purposes of extracting image width/height
             // This is needed to scale texcoords appropriately
             N64Material temp_mat;
-            read_textures(model, model.materials[primitive.material], temp_mat);
+            const auto& mat = model.materials[primitive.material];
+            read_textures(model, mat, temp_mat);
+            
+            auto ext_it = mat.extensions.find(gtlf64_extension);
+            if (ext_it != mat.extensions.end())
+            {
+                // fmt::print("Reading geometry mode for {}\n", mat.name);
+                read_geometry_mode(mat, ext_it->second, temp_mat);
+            }
+            else
+            {
+                // fmt::print("Material {} does not have gltf64 extension\n", mat.name);
+            }
 
             if (temp_mat.set_tex[0])
             {
@@ -302,6 +315,7 @@ void populate_verts_triangles(const tinygltf::Model& model, vertex_array& verts,
             // Determine whether to read normals or vertex colors
             if (material_lit)
             {
+                // fmt::print("Material {} uses lighting\n", mat.name);
                 // Read normals
                 gltf_foreach_attribute<float>("NORMAL", model, attributes,
                 [&](size_t vert_index, float* norm)
@@ -320,6 +334,7 @@ void populate_verts_triangles(const tinygltf::Model& model, vertex_array& verts,
             }
             else
             {
+                // fmt::print("Material {} is unlit\n", mat.name);
                 // Read colors
                 gltf_foreach_attribute<float>("COLOR_0", model, attributes,
                 [&](size_t vert_index, float* color)
