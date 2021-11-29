@@ -230,10 +230,11 @@ void populate_verts_triangles(const tinygltf::Model& model, vertex_array& verts,
 
             // Read the primitive's material into a temporary N64Material for the purposes of extracting image width/height
             // This is needed to scale texcoords appropriately
-            N64Material temp_mat;
+            N64Material temp_mat{};
             const auto& mat = model.materials[primitive.material];
             read_textures(model, mat, temp_mat);
             
+            constexpr uint32_t G_LIGHTING = 0x00020000;
             auto ext_it = mat.extensions.find(gtlf64_extension);
             if (ext_it != mat.extensions.end())
             {
@@ -243,6 +244,11 @@ void populate_verts_triangles(const tinygltf::Model& model, vertex_array& verts,
             else
             {
                 // fmt::print("Material {} does not have gltf64 extension\n", mat.name);
+            }
+            // Default to lighting being on for non gltf64 mats
+            if (!temp_mat.set_geometry_mode)
+            {
+                temp_mat.geometry_mode |= G_LIGHTING;
             }
 
             if (temp_mat.set_tex[0])
@@ -256,7 +262,6 @@ void populate_verts_triangles(const tinygltf::Model& model, vertex_array& verts,
                 t_scale = temp_mat.textures[1].image_height;
             }
 
-            constexpr uint32_t G_LIGHTING = 0x00020000;
             int material_lit = (temp_mat.geometry_mode & G_LIGHTING) != 0;
 
             if (!temp_mat.filter_nearest)
