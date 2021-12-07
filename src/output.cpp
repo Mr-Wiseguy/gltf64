@@ -417,7 +417,7 @@ void write_model_file(const std::filesystem::path& file_path, const N64Model& in
             constexpr uint32_t G_TEXTURE_GEN = 0x00040000;
             constexpr uint32_t G_TEXTURE_GEN_LINEAR = 0x00080000;
             // Allocate extra gfx commands to set the texture scale for any textures if the geometry mode includes env mapping
-            if (geometry_mode & (G_TEXTURE_GEN | G_TEXTURE_GEN_LINEAR))
+            if (input_material.geometry_mode & (G_TEXTURE_GEN | G_TEXTURE_GEN_LINEAR))
             {
                 if (input_material.set_tex[0])
                 {
