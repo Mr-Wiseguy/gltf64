@@ -5,7 +5,6 @@
 #include <memory>
 #include <type_traits>
 #include <initializer_list>
-#include <fmt/core.h>
 
 template <typename T, typename ...Ts>
 inline constexpr bool areT_v = std::conjunction_v<std::is_same<T,Ts>...>;
@@ -32,37 +31,50 @@ public:
     using const_iterator         = const value_type*;
     using reverse_iterator       = std::reverse_iterator<iterator>;
     using const_reverse_iterator = std::reverse_iterator<const_iterator>;
+    using storage_type           = std::aligned_storage<sizeof(T), alignof(T)>::type;
 
-    dynamic_array() = default;
+    dynamic_array() :
+        data_(nullptr),
+        size_(0)
+    {
+
+    }
 
     explicit dynamic_array(size_type size) :
-        data_(std::unique_ptr<T[]>(new T[size]())),
-        size_(size) {}
-
-    explicit dynamic_array(size_type size, const T& value) :
-        data_(std::unique_ptr<T[]>(new T[size])),
+        data_(std::unique_ptr<storage_type[]>(new storage_type[size]())),
         size_(size)
     {
-        std::fill(begin(), end(), value);
+        std::uninitialized_default_construct_n(begin(), size);
+    }
+
+    explicit dynamic_array(size_type size, const T& value) :
+        data_(std::unique_ptr<storage_type[]>(new storage_type[size])),
+        size_(size)
+    {
+        std::uninitialized_fill_n(begin(), size, value);
     }
 
     dynamic_array(std::initializer_list<T> list) :
-        data_(std::unique_ptr<T[]>(new T[list.size()])),
+        data_(std::unique_ptr<storage_type[]>(new storage_type[list.size()])),
         size_(list.size())
     {
-        std::copy(list.begin(), list.end(), data_.get());
+        std::uninitialized_copy_n(list.begin(), size_, begin());
     }
 
-    // Destructor (nothing needed due to unique_ptr)
+    // Destructor
     ~dynamic_array()
-    {}
+    {
+        // Destroy objects in data_
+        std::destroy_n(begin(), size_);
+        // data_ unique_ptr will get deallocated automatically
+    }
 
     // Copy constructor
     dynamic_array(const dynamic_array& rhs) :
-        data_(std::unique_ptr<T[]>(new T[rhs.size_])),
+        data_(std::unique_ptr<storage_type[]>(new storage_type[rhs.size_])),
         size_(rhs.size_)
     {
-        std::copy(rhs.begin(), rhs.end(), data_.get());
+        std::uninitialized_copy_n(rhs.begin(), size_, begin());
     }
     
     // Move constructor
@@ -73,47 +85,56 @@ public:
     // Copy assignment
     dynamic_array& operator=(const dynamic_array& rhs)
     {
+        // Prevent copying this object to itself
         if (this == &rhs) return *this;
+        // Destroy any objects in this object's existing data
+        std::destroy_n(begin(), size_);
+        // Allocate new data
+        data_ = std::unique_ptr<storage_type[]>(new storage_type[rhs.size_]);
+        // Copy the input data into the newly allocated data
         size_ = rhs.size_;
-        data_ = std::unique_ptr<T[]>(new T[size_]);
-        std::copy(rhs.begin(), rhs.end(), data_.get());
+        std::uninitialized_copy_n(rhs.begin(), size_, begin());
         return *this;
     }
 
     // Move assignment
     dynamic_array& operator=(dynamic_array&& rhs) noexcept
     {
+        // Destroy any objects in this object's existing data
+        std::destroy_n(begin(), size_);
+        // Move the rhs object's data into this object
         data_ = std::move(rhs.data_);
+        // Set this object's size to the rhs object's size, and zero the rhs object's size
         size_ = std::exchange(rhs.size_, 0);
         return *this;
     };
 
-    const T& operator[](size_type index) const noexcept { return data_[index]; }
-    T&       operator[](size_type index)       noexcept { return data_[index]; }
+    const T& operator[](size_type index) const noexcept { return reinterpret_cast<reference>(data_[index]); }
+    T&       operator[](size_type index)       noexcept { return reinterpret_cast<reference>(data_[index]); }
     
-    const T* data() const noexcept { return data_.get(); }
-    T*       data()       noexcept { return data_.get(); }
+    const T* data() const noexcept { return reinterpret_cast<pointer>(data_.get()); }
+    T*       data()       noexcept { return reinterpret_cast<pointer>(data_.get()); }
 
-    const_iterator begin() const noexcept { return &data_[0]; }
-    iterator       begin()       noexcept { return &data_[0]; }
+    const_iterator begin() const noexcept { return reinterpret_cast<pointer>(&data_[0]); }
+    iterator       begin()       noexcept { return reinterpret_cast<pointer>(&data_[0]); }
 
-    const_iterator end() const noexcept { return &data_[size_]; }
-    iterator       end()       noexcept { return &data_[size_]; }
+    const_iterator end() const noexcept { return reinterpret_cast<pointer>(&data_[size_]); }
+    iterator       end()       noexcept { return reinterpret_cast<pointer>(&data_[size_]); }
 
-    const_reverse_iterator rbegin() const noexcept { return &data_[size_ - 1]; }
-    reverse_iterator       rbegin()       noexcept { return &data_[size_ - 1]; }
+    const_reverse_iterator rbegin() const noexcept { return reinterpret_cast<pointer>(&data_[size_ - 1]); }
+    reverse_iterator       rbegin()       noexcept { return reinterpret_cast<pointer>(&data_[size_ - 1]); }
 
-    const_reverse_iterator rend() const noexcept { return &data_[-1]; }
-    reverse_iterator       rend()       noexcept { return &data_[-1]; }
+    const_reverse_iterator rend() const noexcept { return reinterpret_cast<pointer>(&data_[-1]); }
+    reverse_iterator       rend()       noexcept { return reinterpret_cast<pointer>(&data_[-1]); }
 
-    T* release() noexcept { size_ = 0; return data_.release(); }
+    T* release() noexcept { size_ = 0; return reinterpret_cast<pointer>(data_.release()); }
 
     void truncate(size_type new_size) { if (new_size < size_) { size_ = new_size; }}
 
     size_type size() const noexcept { return size_; }
     bool empty() const noexcept { return size_ == 0; }
 private:
-    std::unique_ptr<T[]> data_;
+    std::unique_ptr<storage_type[]> data_;
     size_type size_;
 };
 
