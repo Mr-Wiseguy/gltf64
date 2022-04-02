@@ -1,6 +1,7 @@
 #include <filesystem>
 #include <cstdlib>
 #include <unordered_map>
+#include <random>
 
 #include <tiny_gltf.h>
 #include <fmt/core.h>
@@ -81,6 +82,10 @@ dynamic_array<std::pair<std::string, N64ImageFormat>> convert_images(
     fs::path input_dir = fs::path(model_input_path).parent_path();
     fs::path output_dir = fs::path(model_output_path).parent_path();
 
+    std::random_device dev;
+    std::mt19937 rng(dev());
+    std::uniform_int_distribution<std::mt19937::result_type> dist(0, std::numeric_limits<std::mt19937::result_type>::max());
+
     for (const auto& cur_image : model.images)
     {
         // TODO support higher color-depth image formats
@@ -94,7 +99,9 @@ dynamic_array<std::pair<std::string, N64ImageFormat>> convert_images(
         fs::path image_input_path = input_dir / image_relative_path;
         fs::path image_output_path = (output_dir / image_relative_path).replace_extension();
         fs::path image_linear_path = image_output_path;
-        image_linear_path.concat("_linear.png");
+        image_linear_path.concat("_linear");
+        image_linear_path.concat(fmt::format("{}", dist(rng)));
+        image_linear_path.concat(".png");
         fs::path image_output_dir = image_output_path.parent_path();
         if (!fs::exists(image_input_path))
         {
@@ -147,7 +154,7 @@ dynamic_array<std::pair<std::string, N64ImageFormat>> convert_images(
         }
 
         std::string n64graphics_callstring = fmt::format(
-            "n64graphics -i {} -g {} -f {}", image_output_path.c_str(), image_linear_path.c_str(), image_format.first
+            "n64graphics -i {} -g {} -f {} >/dev/null 2>/dev/null", image_output_path.c_str(), image_linear_path.c_str(), image_format.first
         );
 
         // fmt::print("n64graphics callstring: `{}`\n", n64graphics_callstring);

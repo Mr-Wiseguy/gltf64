@@ -1,6 +1,8 @@
 #include <filesystem>
 #include <fstream>
 
+#include <fmt/core.h>
+
 #include <dynamic_array.h>
 #include <n64model.h>
 #include <output.h>
